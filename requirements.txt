@@ -1,0 +1,6 @@
+streamlit>=1.40
+yfinance>=0.2.54
+pandas>=2.2
+numpy>=1.26
+plotly>=5.24
+twstock>=1.4.0
