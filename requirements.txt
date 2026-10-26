@@ -4,3 +4,4 @@ pandas>=2.2
 numpy>=1.26
 plotly>=5.24
 twstock>=1.4.0
+openai>=2.0.0
