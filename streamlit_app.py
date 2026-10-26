@@ -342,7 +342,7 @@ def build_trading_strategy(ind: dict, ev: dict) -> dict:
 def load_favorites() -> list[str]:
     """Read the current visitor's watchlist for the selected market."""
     if "favorites_by_market" not in st.session_state:
-        st.session_state["favorites_by_market"] = {"🇹🇼 Taiwan": [], "🇺🇸 U.S.": []}
+        st.session_state["favorites_by_market"] = {"TW Stock": [], "US Stock": []}
     if market not in st.session_state["favorites_by_market"]:
         st.session_state["favorites_by_market"][market] = []
     return list(st.session_state["favorites_by_market"][market])
@@ -354,7 +354,7 @@ def save_favorites(items: list[str]) -> None:
     for x in items:
         x = str(x).strip().upper()
         valid = (
-            re.fullmatch(r"\d{4,6}", x) if market == "🇹🇼 Taiwan"
+            re.fullmatch(r"\d{4,6}", x) if market == "TW Stock"
             else re.fullmatch(r"[A-Z][A-Z0-9.\-]{0,9}", x)
         )
         if valid and x not in cleaned:
@@ -365,7 +365,7 @@ def save_favorites(items: list[str]) -> None:
 def add_favorite(stock_id: str) -> bool:
     stock_id = str(stock_id).strip().upper()
     valid = (
-        re.fullmatch(r"\d{4,6}", stock_id) if market == "🇹🇼 Taiwan"
+        re.fullmatch(r"\d{4,6}", stock_id) if market == "TW Stock"
         else re.fullmatch(r"[A-Z][A-Z0-9.\-]{0,9}", stock_id)
     )
     if not valid:
@@ -390,14 +390,14 @@ def remove_favorite(stock_id: str) -> None:
 # =========================================================
 def normalize_symbol_by_market(stock_id: str, market: str) -> str:
     stock_id = stock_id.strip().upper()
-    if market == "🇺🇸 U.S.":
+    if market == "US Stock":
         return stock_id
     return stock_id
 
 
 def resolve_name_by_market(stock_id: str, market: str) -> str:
     sid = stock_id.strip().upper()
-    if market == "🇺🇸 U.S.":
+    if market == "US Stock":
         if sid in US_LOOKUP:
             return US_LOOKUP[sid]
         try:
@@ -418,7 +418,7 @@ def resolve_name_by_market(stock_id: str, market: str) -> str:
 def fetch_market_df(stock_id: str, market: str, interval: str = "1d", period: str = "6mo") -> pd.DataFrame:
     """Shared market-data loader. Taiwan stocks use .TW/.TWO; U.S. stocks use Yahoo tickers directly."""
     sid = stock_id.strip().upper()
-    if market == "🇺🇸 U.S.":
+    if market == "US Stock":
         try:
             df = yf.download(
                 sid,
@@ -463,7 +463,7 @@ def get_us_index_overview() -> list[dict]:
     ]
     result = []
     for ticker, label in indexes:
-        df = fetch_market_df(ticker, "🇺🇸 U.S.", interval="1d", period="1y")
+        df = fetch_market_df(ticker, "US Stock", interval="1d", period="1y")
         if df.empty or len(df) < 25:
             continue
         try:
@@ -496,7 +496,7 @@ def run_us_scan_cached() -> dict:
     total = 0
 
     for ticker, name in US_QUICK_POOL:
-        df = fetch_market_df(ticker, "🇺🇸 U.S.", interval="1d", period="6mo")
+        df = fetch_market_df(ticker, "US Stock", interval="1d", period="6mo")
         if df.empty or len(df) < 25:
             continue
         try:
@@ -594,10 +594,10 @@ def get_secret(name: str, default=None):
 
 
 @st.cache_data(ttl=21600, show_spinner=False)
-def fetch_fundamentals(stock_id: str, market: str = "🇹🇼 Taiwan") -> dict:
+def fetch_fundamentals(stock_id: str, market: str = "TW Stock") -> dict:
     """Retrieve available fundamentals; return an empty result if Yahoo has no data so technical analysis can still run."""
     out = {}
-    if market == "🇺🇸 U.S.":
+    if market == "US Stock":
         symbol = stock_id.strip().upper()
     else:
         suffixes = suffix_candidates(stock_id)
@@ -665,7 +665,7 @@ def build_ai_payload(stock_id: str, stock_name: str, interval_label: str, ind: d
     }
 
 
-def generate_ai_advice(stock_id: str, stock_name: str, interval_label: str, ind: dict, ev: dict, strategy: dict, market: str = "🇹🇼 Taiwan") -> str:
+def generate_ai_advice(stock_id: str, stock_name: str, interval_label: str, ind: dict, ev: dict, strategy: dict, market: str = "TW Stock") -> str:
     api_key = get_secret("OPENAI_API_KEY")
     model = get_secret("OPENAI_MODEL", "gpt-6-luna")
 
@@ -971,7 +971,7 @@ def save_combined_favorites(items: list[dict]) -> None:
     for item in items:
         market = item.get("market")
         ticker = str(item.get("ticker", "")).strip().upper()
-        if market not in ("🇹🇼 Taiwan", "🇺🇸 U.S.") or not ticker:
+        if market not in ("TW Stock", "US Stock") or not ticker:
             continue
         key = (market, ticker)
         if key not in seen:
@@ -982,7 +982,7 @@ def save_combined_favorites(items: list[dict]) -> None:
 
 def add_combined_favorite(ticker: str, market: str) -> bool:
     ticker = str(ticker).strip().upper()
-    if market == "🇹🇼 Taiwan":
+    if market == "TW Stock":
         valid = bool(re.fullmatch(r"\d{4,6}", ticker))
     else:
         valid = bool(re.fullmatch(r"[A-Z][A-Z0-9.\-]{0,9}", ticker))
@@ -1011,20 +1011,20 @@ st.sidebar.title("📈 I-Cheng Stock Bot")
 
 selected_market = st.sidebar.radio(
     "Market",
-    ["🇹🇼 Taiwan", "🇺🇸 U.S."],
+    ["TW Stock", "US Stock"],
     horizontal=True,
     key="top_market_selector",
 )
 
-if selected_market == "🇹🇼 Taiwan":
+if selected_market == "TW Stock":
     subpage = st.sidebar.radio(
-        "Taiwan Functions",
+        "TW Stock Functions",
         ["Individual Stock Analysis", "Full-Market Screening", "Scoring Rules"],
         key="tw_subpage",
     )
 else:
     subpage = st.sidebar.radio(
-        "U.S. Functions",
+        "US Stock Functions",
         ["Individual Stock Analysis", "Market Overview", "Scoring Rules"],
         key="us_subpage",
     )
@@ -1033,14 +1033,14 @@ else:
 # Shared Watchlist in Sidebar
 # =========================================================
 st.sidebar.divider()
-st.sidebar.subheader("⭐ My Watchlist (Taiwan + U.S.)")
+st.sidebar.subheader("⭐ My Watchlist (TW + US)")
 
 fav_market = st.sidebar.selectbox(
     "Watchlist Market",
-    ["🇹🇼 Taiwan", "🇺🇸 U.S."],
+    ["TW Stock", "US Stock"],
     key="fav_add_market",
 )
-fav_placeholder = "e.g. 2330" if fav_market == "🇹🇼 Taiwan" else "e.g. AAPL / MU"
+fav_placeholder = "e.g. 2330" if fav_market == "TW Stock" else "e.g. AAPL / MU"
 fav_input = st.sidebar.text_input(
     "Ticker",
     placeholder=fav_placeholder,
@@ -1063,7 +1063,7 @@ else:
         f_market = item["market"]
         sid = item["ticker"]
         name = resolve_name_by_market(sid, f_market)
-        flag = "🇹🇼" if f_market == "🇹🇼 Taiwan" else "🇺🇸"
+        flag = "🇹🇼" if f_market == "TW Stock" else "🇺🇸"
 
         c1, c2 = st.sidebar.columns([4, 1])
         if c1.button(
@@ -1071,12 +1071,12 @@ else:
             key=f"fav_open_{f_market}_{sid}",
             use_container_width=True,
         ):
-            if f_market == "🇹🇼 Taiwan":
-                st.session_state["top_market_selector"] = "🇹🇼 Taiwan"
+            if f_market == "TW Stock":
+                st.session_state["top_market_selector"] = "TW Stock"
                 st.session_state["tw_subpage"] = "Individual Stock Analysis"
                 st.session_state["tw_stock_id"] = sid
             else:
-                st.session_state["top_market_selector"] = "🇺🇸 U.S."
+                st.session_state["top_market_selector"] = "US Stock"
                 st.session_state["us_subpage"] = "Individual Stock Analysis"
                 st.session_state["us_stock_id"] = sid
             st.rerun()
@@ -1085,7 +1085,7 @@ else:
             remove_combined_favorite(sid, f_market)
             st.rerun()
 
-st.sidebar.caption("Taiwan and U.S. stocks share one watchlist. Each visitor still has an independent session.")
+st.sidebar.caption("TW and US stocks share one watchlist. Each visitor still has an independent session.")
 
 # =========================================================
 # Page Header
@@ -1098,7 +1098,7 @@ st.caption(
 
 
 def render_stock_analysis(selected_market: str):
-    is_tw = selected_market == "🇹🇼 Taiwan"
+    is_tw = selected_market == "TW Stock"
     stock_key = "tw_stock_id" if is_tw else "us_stock_id"
 
     col1, col2 = st.columns([1, 3])
@@ -1253,15 +1253,15 @@ def render_stock_analysis(selected_market: str):
 
 
 # =========================================================
-# Taiwan Functions
+# TW Stock Functions
 # =========================================================
-if selected_market == "🇹🇼 Taiwan":
+if selected_market == "TW Stock":
     if subpage == "Individual Stock Analysis":
-        st.subheader("🇹🇼 TaiwanIndividual Stock Analysis")
-        render_stock_analysis("🇹🇼 Taiwan")
+        st.subheader("TW StockIndividual Stock Analysis")
+        render_stock_analysis("TW Stock")
 
     elif subpage == "Full-Market Screening":
-        st.subheader("🇹🇼 Taiwan Full-Market Screening + Market Breadth")
+        st.subheader("TW Stock Full-Market Screening + Market Breadth")
         st.caption(
             "Scans Taiwan listed and OTC common stocks in two stages. Stage one ranks stocks by trend, returns, volume, and liquidity; "
             "stage two applies the full technical scoring model to the top 50 candidates. Market breadth uses the same market-wide dataset."
@@ -1340,16 +1340,16 @@ if selected_market == "🇹🇼 Taiwan":
         )
 
 # =========================================================
-# U.S. Functions
+# US Stock Functions
 # =========================================================
 else:
     if subpage == "Individual Stock Analysis":
-        st.subheader("🇺🇸 U.S.Individual Stock Analysis")
+        st.subheader("US StockIndividual Stock Analysis")
         st.caption("Enter a Yahoo Finance ticker directly, for example AAPL, NVDA, MU, or TSLA.")
-        render_stock_analysis("🇺🇸 U.S.")
+        render_stock_analysis("US Stock")
 
     elif subpage == "Market Overview":
-        st.subheader("🇺🇸 U.S. Market Overview + Popular-Stock Radar")
+        st.subheader("US Stock Market Overview + Popular-Stock Radar")
         st.caption(
             "This is not a full U.S. market scan. The upper section uses SPY, QQQ, DIA, and IWM to summarize major market direction; "
             "the lower section scans a representative group of liquid stocks."
