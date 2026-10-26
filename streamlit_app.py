@@ -362,8 +362,10 @@ def build_trading_strategy(ind: dict, ev: dict) -> dict:
 # 自選股（每位訪客各自的 Streamlit Session，不共用主機檔案）
 # =========================================================
 def load_favorites() -> list[str]:
-    """讀取目前訪客這個 Streamlit session 的自選股。"""
-    if "favorites" not in st.session_state:
+    """讀取目前訪客、目前市場的自選股。"""
+    if "favorites_by_market" not in st.session_state:
+        st.session_state["favorites_by_market"] = {"🇹🇼 台股": [], "🇺🇸 美股": []}
+    if market not in st.session_state["favorites_by_market"]:
         st.session_state["favorites_by_market"][market] = []
     return list(st.session_state["favorites_by_market"][market])
 
@@ -372,15 +374,23 @@ def save_favorites(items: list[str]) -> None:
     """只儲存在目前訪客的 session，不寫入共用 JSON。"""
     cleaned = []
     for x in items:
-        x = str(x).strip()
-        if re.fullmatch(r"\d{4,6}", x) and x not in cleaned:
+        x = str(x).strip().upper()
+        valid = (
+            re.fullmatch(r"\d{4,6}", x) if market == "🇹🇼 台股"
+            else re.fullmatch(r"[A-Z][A-Z0-9.\-]{0,9}", x)
+        )
+        if valid and x not in cleaned:
             cleaned.append(x)
     st.session_state["favorites_by_market"][market] = cleaned
 
 
 def add_favorite(stock_id: str) -> bool:
-    stock_id = str(stock_id).strip()
-    if not re.fullmatch(r"\d{4,6}", stock_id):
+    stock_id = str(stock_id).strip().upper()
+    valid = (
+        re.fullmatch(r"\d{4,6}", stock_id) if market == "🇹🇼 台股"
+        else re.fullmatch(r"[A-Z][A-Z0-9.\-]{0,9}", stock_id)
+    )
+    if not valid:
         return False
     favs = load_favorites()
     if stock_id not in favs:
@@ -944,6 +954,9 @@ if "favorites_by_market" not in st.session_state:
     st.session_state["favorites_by_market"] = {"🇹🇼 台股": [], "🇺🇸 美股": []}
 
 market = st.sidebar.radio("市場", ["🇹🇼 台股", "🇺🇸 美股"], horizontal=True, key="market_selector")
+if st.session_state.get("last_market_selector") != market:
+    st.session_state["last_market_selector"] = market
+    st.session_state["stock_id_input"] = "2330" if market == "🇹🇼 台股" else "AAPL"
 page = st.sidebar.radio(
     "功能選單",
     ["個股分析", "掃描中心＋大盤廣度", "評分規則"],
@@ -952,11 +965,11 @@ page = st.sidebar.radio(
 
 st.sidebar.divider()
 st.sidebar.subheader("⭐ 我的自選股")
-sidebar_add = st.sidebar.text_input("加入股票代號", placeholder="例如 2330", key="sidebar_add_stock")
+sidebar_add = st.sidebar.text_input("加入股票代號", placeholder=("例如 2330" if market == "🇹🇼 台股" else "例如 AAPL / MU"), key="sidebar_add_stock")
 if st.sidebar.button("➕ 加入自選", use_container_width=True):
     sid = sidebar_add.strip()
     if add_favorite(sid):
-        st.sidebar.success(f"已加入 {resolve_stock_name(sid)} ({sid})")
+        st.sidebar.success(f"已加入 {resolve_name_by_market(sid, market)} ({sid.upper()})")
         st.rerun()
     else:
         st.sidebar.warning("請輸入正確股票代號。")
@@ -966,7 +979,7 @@ if not favorites:
     st.sidebar.caption("目前尚無自選股。")
 else:
     for sid in favorites:
-        name = resolve_stock_name(sid)
+        name = resolve_name_by_market(sid, market)
         c1, c2 = st.sidebar.columns([4, 1])
         c1.button(
             f"{name} ({sid})",
@@ -990,7 +1003,7 @@ st.caption("台股 / 美股量化技術分析｜AI 短線 / 長線觀點｜MA / 
 if page == "個股分析":
     col1, col2 = st.columns([1, 3])
     with col1:
-        stock_id = st.text_input("股票代號", key="stock_id_input", max_chars=6).strip()
+        stock_id = st.text_input("股票代號", key="stock_id_input", max_chars=10).strip().upper()
         interval_label = st.selectbox("K線週期", ["日K", "週K", "60分", "15分", "5分"])
         interval_map = {"日K": "1d", "週K": "1wk", "60分": "60m", "15分": "15m", "5分": "5m"}
         period_map = {"1d": "6mo", "1wk": "2y", "60m": "3mo", "15m": "1mo", "5m": "1mo"}
@@ -1003,10 +1016,10 @@ if page == "個股分析":
     if do_search or stock_id:
         interval = interval_map[interval_label]
         with st.spinner("抓取股價與計算技術指標中..."):
-            df = fetch_stock_df(stock_id, interval, period_map[interval])
+            df = fetch_market_df(stock_id, market, interval, period_map[interval])
 
         if df.empty:
-            st.error("查無股價資料，請確認股票代號。")
+            st.error("查無股價資料，請確認市場與股票代號是否正確。美股例如：MU、AAPL、NVDA；台股例如：2330。")
         else:
             ind = calculate_indicators(df)
             ev = evaluate_score(ind)
