@@ -50,7 +50,7 @@ def get_full_market_pool():
                 name = str(getattr(info, "name", code))
                 if market not in ("上市", "上櫃"):
                     continue
-                if kind and "Stock" not in kind:
+                if kind and "股票" not in kind:
                     continue
                 suffix = ".TW" if market == "上市" else ".TWO"
                 rows.append((code, name, suffix))
@@ -489,6 +489,7 @@ def get_us_index_overview() -> list[dict]:
     return result
 
 
+@st.cache_data(ttl=1800, show_spinner=False)
 def run_us_scan_cached() -> dict:
     """U.S. radar: scan a representative high-liquidity stock universe. Individual stock analysis is not limited to this list."""
     rows = []
