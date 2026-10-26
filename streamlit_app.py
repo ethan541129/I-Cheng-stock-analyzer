@@ -18,6 +18,7 @@ except Exception:
 # 基本設定
 # =========================================================
 TW_TZ = timezone(timedelta(hours=8))
+SCAN_CACHE_MINUTES = 30
 FIRST_STAGE_KEEP = 50
 BATCH_SIZE = 80
 MIN_AVG_TURNOVER = 8_000_000
@@ -351,6 +352,42 @@ def build_trading_strategy(ind: dict, ev: dict) -> dict:
 
 
 # =========================================================
+# 自選股（每位訪客各自的 Streamlit Session，不共用主機檔案）
+# =========================================================
+def load_favorites() -> list[str]:
+    """讀取目前訪客這個 Streamlit session 的自選股。"""
+    if "favorites" not in st.session_state:
+        st.session_state["favorites"] = []
+    return list(st.session_state["favorites"])
+
+
+def save_favorites(items: list[str]) -> None:
+    """只儲存在目前訪客的 session，不寫入共用 JSON。"""
+    cleaned = []
+    for x in items:
+        x = str(x).strip()
+        if re.fullmatch(r"\d{4,6}", x) and x not in cleaned:
+            cleaned.append(x)
+    st.session_state["favorites"] = cleaned
+
+
+def add_favorite(stock_id: str) -> bool:
+    stock_id = str(stock_id).strip()
+    if not re.fullmatch(r"\d{4,6}", stock_id):
+        return False
+    favs = load_favorites()
+    if stock_id not in favs:
+        favs.append(stock_id)
+        save_favorites(favs)
+    return True
+
+
+def remove_favorite(stock_id: str) -> None:
+    favs = [x for x in load_favorites() if x != str(stock_id)]
+    save_favorites(favs)
+
+
+# =========================================================
 # 圖表
 # =========================================================
 def price_chart(df: pd.DataFrame, ind: dict):
@@ -469,13 +506,44 @@ def first_stage_market_scan(limit=FIRST_STAGE_KEEP):
     return candidates[:limit], above_ma20, valid_total
 
 
+def fetch_candidate_frames(candidates, period="6mo"):
+    """候選股第二階段批次下載，避免逐檔發送 50 次 Yahoo request。"""
+    result = {}
+    for start in range(0, len(candidates), BATCH_SIZE):
+        chunk = candidates[start:start+BATCH_SIZE]
+        symbols = [c["ticker"] + c["suffix"] for c in chunk if c.get("suffix")]
+        if not symbols:
+            continue
+        try:
+            raw = yf.download(
+                tickers=" ".join(symbols),
+                period=period,
+                interval="1d",
+                group_by="ticker",
+                auto_adjust=False,
+                threads=True,
+                progress=False,
+            )
+        except Exception:
+            continue
+        for cand in chunk:
+            symbol = cand["ticker"] + cand.get("suffix", "")
+            df = _extract_symbol_frame(raw, symbol)
+            if len(df) >= 25:
+                result[cand["ticker"]] = df
+    return result
+
+
 @st.cache_data(ttl=1800, show_spinner=False)
 def run_full_market_scan():
     candidates, above_ma20, valid_total = first_stage_market_scan(FIRST_STAGE_KEEP)
     strong, pullback = [], []
+    frames = fetch_candidate_frames(candidates, period="6mo")
 
     for cand in candidates:
-        df = fetch_stock_df(cand["ticker"], "1d", "6mo")
+        df = frames.get(cand["ticker"], pd.DataFrame())
+        if df.empty:
+            df = fetch_stock_df(cand["ticker"], "1d", "6mo")
         if df.empty:
             continue
         try:
@@ -528,27 +596,81 @@ def calculate_market_breadth():
 # Streamlit UI
 # =========================================================
 st.set_page_config(
-    page_title="台股量化技術分析",
+    page_title="I-Cheng Stock Bot",
     page_icon="📈",
     layout="wide",
 )
 
-st.title("📈 台股量化技術分析 Dashboard")
-st.caption("沿用 Telegram Bot 的多因子評分邏輯：MA / RSI / KD / MACD / 布林通道 / 成交量")
+if "stock_id_input" not in st.session_state:
+    st.session_state["stock_id_input"] = "2330"
+if "page_select" not in st.session_state:
+    st.session_state["page_select"] = "個股分析"
 
+
+def open_favorite(stock_id: str):
+    st.session_state["stock_id_input"] = stock_id
+    st.session_state["page_select"] = "個股分析"
+
+
+# -------------------------
+# 左側導覽 + 自選股
+# -------------------------
+st.sidebar.title("📈 I-Cheng Stock Bot")
 page = st.sidebar.radio(
     "功能選單",
-    ["個股分析", "強勢股掃描", "大盤廣度", "評分規則"]
+    ["個股分析", "掃描中心＋大盤廣度", "評分規則"],
+    key="page_select",
 )
+
+st.sidebar.divider()
+st.sidebar.subheader("⭐ 我的自選股")
+sidebar_add = st.sidebar.text_input("加入股票代號", placeholder="例如 2330", key="sidebar_add_stock")
+if st.sidebar.button("➕ 加入自選", use_container_width=True):
+    sid = sidebar_add.strip()
+    if add_favorite(sid):
+        st.sidebar.success(f"已加入 {resolve_stock_name(sid)} ({sid})")
+        st.rerun()
+    else:
+        st.sidebar.warning("請輸入正確股票代號。")
+
+favorites = load_favorites()
+if not favorites:
+    st.sidebar.caption("目前尚無自選股。")
+else:
+    for sid in favorites:
+        name = resolve_stock_name(sid)
+        c1, c2 = st.sidebar.columns([4, 1])
+        c1.button(
+            f"{name} ({sid})",
+            key=f"fav_open_{sid}",
+            use_container_width=True,
+            on_click=open_favorite,
+            args=(sid,),
+        )
+        if c2.button("✕", key=f"fav_del_{sid}", help=f"移除 {name}"):
+            remove_favorite(sid)
+            st.rerun()
+
+st.sidebar.caption("自選股只屬於目前訪客的使用階段，不與其他使用者共用。")
+
+# -------------------------
+# 頁首
+# -------------------------
+st.title("📈 I-Cheng Stock Bot")
+st.caption("台股量化技術分析｜MA / RSI / KD / MACD / 布林通道 / 成交量｜全市場兩階段掃描")
 
 if page == "個股分析":
     col1, col2 = st.columns([1, 3])
     with col1:
-        stock_id = st.text_input("股票代號", value="2330", max_chars=6).strip()
+        stock_id = st.text_input("股票代號", key="stock_id_input", max_chars=6).strip()
         interval_label = st.selectbox("K線週期", ["日K", "週K", "60分", "15分", "5分"])
         interval_map = {"日K": "1d", "週K": "1wk", "60分": "60m", "15分": "15m", "5分": "5m"}
         period_map = {"1d": "6mo", "1wk": "2y", "60m": "3mo", "15m": "1mo", "5m": "1mo"}
         do_search = st.button("🔍 開始分析", use_container_width=True, type="primary")
+        if st.button("⭐ 加入目前股票到自選", use_container_width=True):
+            if add_favorite(stock_id):
+                st.success("已加入自選股")
+                st.rerun()
 
     if do_search or stock_id:
         interval = interval_map[interval_label]
@@ -603,53 +725,72 @@ if page == "個股分析":
                 r2.metric("目標參考", f"{strategy['target']:.2f}", f"+{reward_pct:.1f}%")
                 r3.metric("風報比", f"{rr:.1f} : 1")
 
-elif page == "強勢股掃描":
-    st.subheader("🔥 全市場兩階段選股")
-    st.write("第一階段掃描上市櫃並保留前 50 檔候選，第二階段套用完整多因子評分。")
-    if st.button("🚀 執行全市場掃描", type="primary"):
-        with st.spinner("全市場掃描中，第一次執行會較久..."):
+elif page == "掃描中心＋大盤廣度":
+    st.subheader("📊 全市場掃描中心＋大盤廣度")
+    st.markdown(
+        """
+這裡把 **全市場選股** 與 **大盤廣度** 整合成同一次資料更新：
+
+- 第一階段掃描上市／上櫃股票，依趨勢、5/20 日漲幅、量能與流動性排序，保留前 50 檔候選。
+- 第二階段對候選股套用完整 MA / RSI / KD / MACD / 布林 / 成交量評分。
+- **大盤廣度** 同時統計全市場「股價站上 20 日均線（MA20）」的比例，不另外重掃一次。
+- 廣度越高，代表上漲有較多股票共同參與；廣度偏低，代表市場可能只有少數股票撐盤。
+- 資料快取有效 **30 分鐘**；超過 30 分鐘後，再次進入本頁會取得新一批資料。也可隨時手動重新掃描。
+        """
+    )
+
+    force_scan = st.button("🚀 立即全市場重新掃描", type="primary", use_container_width=False)
+    if force_scan:
+        first_stage_market_scan.clear()
+        run_full_market_scan.clear()
+        st.session_state.pop("market_scan_result", None)
+
+    result = st.session_state.get("market_scan_result")
+    stale = True
+    if result and result.get("updated"):
+        try:
+            dt = datetime.datetime.strptime(result["updated"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=TW_TZ)
+            stale = (datetime.datetime.now(TW_TZ) - dt).total_seconds() >= SCAN_CACHE_MINUTES * 60
+        except Exception:
+            stale = True
+
+    if force_scan or result is None or stale:
+        with st.spinner("正在掃描上市／上櫃市場並同步計算大盤廣度..."):
             result = run_full_market_scan()
         st.session_state["market_scan_result"] = result
 
-    result = st.session_state.get("market_scan_result")
     if result:
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("有效樣本", result["valid_total"])
-        c2.metric("候選股", result["candidates"])
-        c3.metric("強勢股", len(result["strong"]))
-        c4.metric("回調股", len(result["pullback"]))
-        st.caption(f"更新時間：{result['updated']}")
+        pct = result["above_ma20"] / max(result["valid_total"], 1) * 100
+        status = "🟢 多頭健康" if pct >= 50 else "🟡 震盪整理" if pct >= 30 else "🔴 空頭偏弱"
+
+        st.caption(f"🕒 全市場資料更新時間：{result['updated']}（同一批資料供選股與大盤廣度使用）")
+
+        a1, a2, a3, a4 = st.columns(4)
+        a1.metric("大盤廣度｜站上 MA20", f"{pct:.1f}%")
+        a2.metric("站上 MA20 檔數", result["above_ma20"])
+        a3.metric("有效市場樣本", result["valid_total"])
+        a4.metric("市場狀態", status)
+        st.progress(min(max(pct / 100, 0.0), 1.0))
+
+        st.divider()
+        c1, c2, c3 = st.columns(3)
+        c1.metric("第一階段候選", result["candidates"])
+        c2.metric("🔥 強勢多頭股", len(result["strong"]))
+        c3.metric("🔻 多頭回調股", len(result["pullback"]))
 
         tab1, tab2 = st.tabs(["🔥 強勢多頭", "🔻 多頭回調"])
         with tab1:
+            st.caption("完整評分達強勢門檻、且股價站上 MA20 的候選股。")
             if result["strong"].empty:
                 st.info("目前沒有符合條件的強勢股。")
             else:
                 st.dataframe(result["strong"], use_container_width=True, hide_index=True)
         with tab2:
+            st.caption("中期仍在多頭架構，但當日回檔、評分尚未達強勢門檻的候選股。")
             if result["pullback"].empty:
                 st.info("目前沒有符合條件的回調股。")
             else:
                 st.dataframe(result["pullback"], use_container_width=True, hide_index=True)
-
-elif page == "大盤廣度":
-    st.subheader("🌡️ 台股大盤廣度")
-    if st.button("🔄 更新大盤廣度", type="primary"):
-        with st.spinner("計算站上 20 日均線比例中..."):
-            breadth = calculate_market_breadth()
-        st.session_state["breadth"] = breadth
-
-    breadth = st.session_state.get("breadth")
-    if breadth:
-        pct = breadth["pct"]
-        status = "🟢 多頭健康" if pct >= 50 else "🟡 震盪整理" if pct >= 30 else "🔴 空頭偏弱"
-        b1, b2, b3 = st.columns(3)
-        b1.metric("站上月線比例", f"{pct:.1f}%")
-        b2.metric("站上月線檔數", breadth["above_ma20"])
-        b3.metric("有效樣本", breadth["total"])
-        st.progress(min(max(pct / 100, 0.0), 1.0))
-        st.info(f"市場狀態：{status}")
-        st.caption(f"更新時間：{breadth['updated']}")
 
 elif page == "評分規則":
     st.subheader("📖 多因子技術動能評分規則（-5 至 +5）")
