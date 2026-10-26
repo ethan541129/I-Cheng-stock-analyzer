@@ -32,25 +32,6 @@ MIN_AVG_TURNOVER = 8_000_000
 STRONG_BULL_SCORE = 2.0
 PULLBACK_MIN_SCORE = 0.0
 
-QUICK_POOL = [
-    ("0050", "元大台灣50"), ("0056", "元大高股息"),
-    ("2330", "台積電"), ("2317", "鴻海"), ("2454", "聯發科"), ("2308", "台達電"),
-    ("2382", "廣達"), ("2357", "華碩"), ("2379", "瑞昱"), ("2327", "國巨"),
-    ("2303", "聯電"), ("2408", "南亞科"), ("2344", "華邦電"), ("2337", "旺宏"),
-    ("8299", "群聯"), ("3034", "聯詠"), ("3661", "世芯-KY"), ("3443", "創意"),
-    ("3711", "日月光投控"), ("2449", "京元電子"), ("6239", "力成"), ("8150", "南茂"),
-    ("3583", "辛耘"), ("6187", "萬潤"), ("3131", "弘塑"), ("6643", "M31"),
-    ("3231", "緯創"), ("6669", "緯穎"), ("3017", "奇鋐"), ("3324", "雙鴻"),
-    ("2345", "智邦"), ("2383", "台光電"), ("3037", "欣興"), ("8046", "南電"),
-    ("2368", "金像電"), ("3013", "晟銘電"), ("2356", "英業達"), ("2376", "技嘉"),
-    ("3081", "聯亞"), ("3363", "上詮"), ("4979", "華星光"), ("6442", "光聖"),
-    ("3163", "波若威"), ("4908", "前鼎"),
-    ("1519", "華城"), ("1513", "中興電"), ("1503", "士電"), ("1609", "大亞"),
-    ("2492", "華新科"), ("3026", "禾伸堂"),
-    ("2603", "長榮"), ("2609", "陽明"), ("2615", "萬海"), ("2618", "長榮航"),
-    ("2881", "富邦金"), ("2882", "國泰金"), ("2891", "中信金"), ("2886", "兆豐金"),
-    ("3702", "大聯大"), ("3036", "文曄"), ("8112", "至上"), ("8069", "元太")
-]
 
 # =========================================================
 # 股票池 / 資料抓取
@@ -77,7 +58,7 @@ def get_full_market_pool():
             rows = []
 
     if not rows:
-        rows = [(code, name, "") for code, name in QUICK_POOL]
+        rows = []
 
     dedup = {code: (code, name, suffix) for code, name, suffix in rows}
     return sorted(dedup.values(), key=lambda x: x[0])
@@ -91,9 +72,6 @@ def resolve_stock_name(stock_id: str) -> str:
     lookup = market_lookup()
     if stock_id in lookup:
         return lookup[stock_id][0]
-    for code, name in QUICK_POOL:
-        if code == stock_id:
-            return name
     return stock_id
 
 
@@ -476,6 +454,43 @@ def fetch_market_df(stock_id: str, market: str, interval: str = "1d", period: st
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def get_us_index_overview() -> list[dict]:
+    indexes = [
+        ("SPY", "S&P 500"),
+        ("QQQ", "Nasdaq 100"),
+        ("DIA", "Dow Jones"),
+        ("IWM", "Russell 2000"),
+    ]
+    result = []
+    for ticker, label in indexes:
+        df = fetch_market_df(ticker, "🇺🇸 美股", interval="1d", period="1y")
+        if df.empty or len(df) < 25:
+            continue
+        try:
+            ind = calculate_indicators(df)
+            ev = evaluate_score(ind)
+            pct = (ind["c_now"] - ind["c_prev"]) / max(ind["c_prev"], 1e-9) * 100
+            trend = (
+                "🟢 偏多" if ind["c_now"] > ind["ma20"] > ind["ma60"]
+                else "🔴 偏空" if ind["c_now"] < ind["ma20"] < ind["ma60"]
+                else "🟡 震盪"
+            )
+            result.append({
+                "ticker": ticker,
+                "name": label,
+                "price": round(ind["c_now"], 2),
+                "pct_ch": round(pct, 2),
+                "score": ev["score"],
+                "rsi": round(ind["rsi"], 1),
+                "trend": trend,
+            })
+        except Exception:
+            continue
+    return result
+
+
 def run_us_scan_cached() -> dict:
     """美股掃描中心：掃描高流動性代表性股票池。個股分析本身不限此清單。"""
     rows = []
@@ -998,7 +1013,7 @@ st.sidebar.caption("自選股只屬於目前訪客的使用階段，不與其他
 # 頁首
 # -------------------------
 st.title("📈 I-Cheng Stock Bot")
-st.caption("台股 / 美股量化技術分析｜AI 短線 / 長線觀點｜MA / RSI / KD / MACD / 布林通道 / 成交量｜全市場兩階段掃描")
+st.caption("台股 / 美股量化技術分析｜K線歷史資料：日K最長5年、週K最長10年｜AI 短線 / 長線觀點｜MA / RSI / KD / MACD / 布林通道 / 成交量｜全市場兩階段掃描")
 
 if page == "個股分析":
     col1, col2 = st.columns([1, 3])
@@ -1006,7 +1021,13 @@ if page == "個股分析":
         stock_id = st.text_input("股票代號", key="stock_id_input", max_chars=10).strip().upper()
         interval_label = st.selectbox("K線週期", ["日K", "週K", "60分", "15分", "5分"])
         interval_map = {"日K": "1d", "週K": "1wk", "60分": "60m", "15分": "15m", "5分": "5m"}
-        period_map = {"1d": "6mo", "1wk": "2y", "60m": "3mo", "15m": "1mo", "5m": "1mo"}
+        period_map = {
+                "5m": "1mo",
+                "15m": "1mo",
+                "60m": "1y",
+                "1d": "5y",
+                "1wk": "10y"
+            }
         do_search = st.button("🔍 開始分析", use_container_width=True, type="primary")
         if st.button("⭐ 加入目前股票到自選", use_container_width=True):
             if add_favorite(stock_id):
