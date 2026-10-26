@@ -919,6 +919,7 @@ def calculate_market_breadth():
 
 
 
+
 # =========================================================
 # Streamlit UI
 # =========================================================
@@ -948,79 +949,149 @@ st.set_page_config(
     layout="wide",
 )
 
-if "favorites_by_market" not in st.session_state:
-    st.session_state["favorites_by_market"] = {"🇹🇼 台股": [], "🇺🇸 美股": []}
+if "favorites_combined" not in st.session_state:
+    st.session_state["favorites_combined"] = []
 if "tw_stock_id" not in st.session_state:
     st.session_state["tw_stock_id"] = "2330"
 if "us_stock_id" not in st.session_state:
     st.session_state["us_stock_id"] = "AAPL"
 
-# -------------------------
-# 左側功能選單：台股 / 美股完全分開
-# -------------------------
+# =========================================================
+# 共用自選股（台股＋美股）
+# =========================================================
+def load_combined_favorites() -> list[dict]:
+    return list(st.session_state.get("favorites_combined", []))
+
+
+def save_combined_favorites(items: list[dict]) -> None:
+    cleaned = []
+    seen = set()
+    for item in items:
+        market = item.get("market")
+        ticker = str(item.get("ticker", "")).strip().upper()
+        if market not in ("🇹🇼 台股", "🇺🇸 美股") or not ticker:
+            continue
+        key = (market, ticker)
+        if key not in seen:
+            seen.add(key)
+            cleaned.append({"market": market, "ticker": ticker})
+    st.session_state["favorites_combined"] = cleaned
+
+
+def add_combined_favorite(ticker: str, market: str) -> bool:
+    ticker = str(ticker).strip().upper()
+    if market == "🇹🇼 台股":
+        valid = bool(re.fullmatch(r"\d{4,6}", ticker))
+    else:
+        valid = bool(re.fullmatch(r"[A-Z][A-Z0-9.\-]{0,9}", ticker))
+    if not valid:
+        return False
+
+    favs = load_combined_favorites()
+    if not any(x["market"] == market and x["ticker"] == ticker for x in favs):
+        favs.append({"market": market, "ticker": ticker})
+        save_combined_favorites(favs)
+    return True
+
+
+def remove_combined_favorite(ticker: str, market: str) -> None:
+    favs = [
+        x for x in load_combined_favorites()
+        if not (x["market"] == market and x["ticker"] == ticker)
+    ]
+    save_combined_favorites(favs)
+
+
+# =========================================================
+# 左側導覽：先選市場，再選該市場功能
+# =========================================================
 st.sidebar.title("📈 I-Cheng Stock Bot")
-page = st.sidebar.radio(
-    "功能選單",
-    [
-        "🇹🇼 台股個股分析",
-        "🇹🇼 台股全市場掃描",
-        "🇺🇸 美股個股分析",
-        "🇺🇸 美股市場總覽",
-        "📖 評分規則",
-    ],
-    key="page_select_v2",
+
+selected_market = st.sidebar.radio(
+    "市場",
+    ["🇹🇼 台股", "🇺🇸 美股"],
+    horizontal=True,
+    key="top_market_selector",
 )
 
-market = "🇺🇸 美股" if page.startswith("🇺🇸") else "🇹🇼 台股"
-
-# -------------------------
-# 左側自選股：依目前頁面市場分開
-# -------------------------
-if page in ("🇹🇼 台股個股分析", "🇺🇸 美股個股分析"):
-    st.sidebar.divider()
-    st.sidebar.subheader("⭐ 我的自選股")
-
-    placeholder = "例如 2330" if market == "🇹🇼 台股" else "例如 AAPL / MU"
-    sidebar_add = st.sidebar.text_input(
-        "加入股票代號",
-        placeholder=placeholder,
-        key=f"sidebar_add_{market}",
+if selected_market == "🇹🇼 台股":
+    subpage = st.sidebar.radio(
+        "台股功能",
+        ["個股分析", "全市場掃描", "評分規則"],
+        key="tw_subpage",
+    )
+else:
+    subpage = st.sidebar.radio(
+        "美股功能",
+        ["個股分析", "市場總覽", "評分規則"],
+        key="us_subpage",
     )
 
-    if st.sidebar.button("➕ 加入自選", use_container_width=True, key=f"addfav_{market}"):
-        sid = sidebar_add.strip().upper()
-        if add_favorite(sid):
-            st.sidebar.success(f"已加入 {resolve_name_by_market(sid, market)} ({sid})")
-            st.rerun()
-        else:
-            st.sidebar.warning("請輸入正確股票代號。")
+# =========================================================
+# 左側共用自選股
+# =========================================================
+st.sidebar.divider()
+st.sidebar.subheader("⭐ 我的自選股（台＋美）")
 
-    favorites = load_favorites()
-    if not favorites:
-        st.sidebar.caption("目前尚無自選股。")
+fav_market = st.sidebar.selectbox(
+    "新增自選市場",
+    ["🇹🇼 台股", "🇺🇸 美股"],
+    key="fav_add_market",
+)
+fav_placeholder = "例如 2330" if fav_market == "🇹🇼 台股" else "例如 AAPL / MU"
+fav_input = st.sidebar.text_input(
+    "股票代號",
+    placeholder=fav_placeholder,
+    key="fav_add_input",
+)
+
+if st.sidebar.button("➕ 加入自選", use_container_width=True):
+    sid = fav_input.strip().upper()
+    if add_combined_favorite(sid, fav_market):
+        st.sidebar.success(f"已加入 {resolve_name_by_market(sid, fav_market)} ({sid})")
+        st.rerun()
     else:
-        for sid in favorites:
-            name = resolve_name_by_market(sid, market)
-            c1, c2 = st.sidebar.columns([4, 1])
-            if c1.button(f"{name} ({sid})", key=f"fav_open_{market}_{sid}", use_container_width=True):
-                if market == "🇹🇼 台股":
-                    st.session_state["tw_stock_id"] = sid
-                else:
-                    st.session_state["us_stock_id"] = sid
-                st.rerun()
-            if c2.button("✕", key=f"fav_del_{market}_{sid}", help=f"移除 {name}"):
-                remove_favorite(sid)
-                st.rerun()
+        st.sidebar.warning("請輸入正確股票代號。")
 
-    st.sidebar.caption("自選股只存在目前訪客的使用階段，不與其他人共用。")
+favorites = load_combined_favorites()
+if not favorites:
+    st.sidebar.caption("目前尚無自選股。")
+else:
+    for item in favorites:
+        f_market = item["market"]
+        sid = item["ticker"]
+        name = resolve_name_by_market(sid, f_market)
+        flag = "🇹🇼" if f_market == "🇹🇼 台股" else "🇺🇸"
 
-# -------------------------
+        c1, c2 = st.sidebar.columns([4, 1])
+        if c1.button(
+            f"{flag} {name} ({sid})",
+            key=f"fav_open_{f_market}_{sid}",
+            use_container_width=True,
+        ):
+            if f_market == "🇹🇼 台股":
+                st.session_state["top_market_selector"] = "🇹🇼 台股"
+                st.session_state["tw_subpage"] = "個股分析"
+                st.session_state["tw_stock_id"] = sid
+            else:
+                st.session_state["top_market_selector"] = "🇺🇸 美股"
+                st.session_state["us_subpage"] = "個股分析"
+                st.session_state["us_stock_id"] = sid
+            st.rerun()
+
+        if c2.button("✕", key=f"fav_del_{f_market}_{sid}", help=f"移除 {name}"):
+            remove_combined_favorite(sid, f_market)
+            st.rerun()
+
+st.sidebar.caption("台股與美股共用同一份自選清單；不同訪客之間仍互不共用。")
+
+# =========================================================
 # 頁首
-# -------------------------
+# =========================================================
 st.title("📈 I-Cheng Stock Bot")
 st.caption(
-    "台股全市場掃描｜美股市場總覽＋熱門股雷達｜日K最長5年、週K最長10年｜"
-    "MA / RSI / KD / MACD / 布林通道 / 成交量 / AI 短線與長線觀點"
+    "台股全市場掃描｜美股市場總覽＋熱門股雷達｜共用自選股｜"
+    "日K最長5年、週K最長10年｜AI 短線與長線觀點"
 )
 
 
@@ -1065,15 +1136,19 @@ def render_stock_analysis(selected_market: str):
             "全部": None,
         }
 
-        do_search = st.button(
+        st.button(
             "🔍 開始分析",
             use_container_width=True,
             type="primary",
             key=f"search_{selected_market}",
         )
 
-        if st.button("⭐ 加入目前股票到自選", use_container_width=True, key=f"add_current_{selected_market}"):
-            if add_favorite(stock_id):
+        if st.button(
+            "⭐ 加入目前股票到自選",
+            use_container_width=True,
+            key=f"add_current_{selected_market}",
+        ):
+            if add_combined_favorite(stock_id, selected_market):
                 st.success("已加入自選股")
                 st.rerun()
 
@@ -1081,231 +1156,158 @@ def render_stock_analysis(selected_market: str):
         return
 
     interval = interval_map[interval_label]
-    if do_search or stock_id:
-        with st.spinner("抓取股價與計算技術指標中..."):
-            df = fetch_market_df(stock_id, selected_market, interval, period_map[interval])
+    with st.spinner("抓取股價與計算技術指標中..."):
+        df = fetch_market_df(stock_id, selected_market, interval, period_map[interval])
 
-        if df.empty:
-            example = "2330" if is_tw else "MU、AAPL、NVDA"
-            st.error(f"查無股價資料，請確認股票代號。範例：{example}")
-            return
+    if df.empty:
+        example = "2330" if is_tw else "MU、AAPL、NVDA"
+        st.error(f"查無股價資料，請確認股票代號。範例：{example}")
+        return
 
-        ind = calculate_indicators(df)
-        ev = evaluate_score(ind)
-        strategy = build_trading_strategy(ind, ev)
-        pct_ch = (ind["c_now"] - ind["c_prev"]) / max(ind["c_prev"], 1e-10) * 100
-        name = resolve_name_by_market(stock_id, selected_market)
+    ind = calculate_indicators(df)
+    ev = evaluate_score(ind)
+    strategy = build_trading_strategy(ind, ev)
+    pct_ch = (ind["c_now"] - ind["c_prev"]) / max(ind["c_prev"], 1e-10) * 100
+    name = resolve_name_by_market(stock_id, selected_market)
 
-        st.subheader(f"{name} ({stock_id})")
-        m1, m2, m3, m4, m5 = st.columns(5)
-        m1.metric("最新價格", f"{ind['c_now']:.2f}", f"{pct_ch:+.2f}%")
-        m2.metric("綜合評分", f"{ev['score']:+.1f} / 5")
-        m3.metric("RSI", f"{ind['rsi']:.1f}")
-        m4.metric("量比", f"{ev['vol_ratio']:.2f}x")
-        m5.metric("多頭強度", f"{ev['bull_pct']:.0f}%")
+    st.subheader(f"{name} ({stock_id})")
+    m1, m2, m3, m4, m5 = st.columns(5)
+    m1.metric("最新價格", f"{ind['c_now']:.2f}", f"{pct_ch:+.2f}%")
+    m2.metric("綜合評分", f"{ev['score']:+.1f} / 5")
+    m3.metric("RSI", f"{ind['rsi']:.1f}")
+    m4.metric("量比", f"{ev['vol_ratio']:.2f}x")
+    m5.metric("多頭強度", f"{ev['bull_pct']:.0f}%")
 
-        chart_limit = chart_range_map[chart_range]
-        chart_df = df if chart_limit is None else df.tail(chart_limit)
+    chart_limit = chart_range_map[chart_range]
+    chart_df = df if chart_limit is None else df.tail(chart_limit)
 
-        c1, c2 = st.columns([2.2, 1])
-        with c1:
-            st.plotly_chart(price_chart(chart_df, ind), use_container_width=True)
-        with c2:
-            st.plotly_chart(score_gauge(ev["score"]), use_container_width=True)
-            st.info(f"**策略定位：{strategy['stance']}**")
-            st.write(f"**新進場：** {strategy['new_entry']}")
-            st.write(f"**已持有：** {strategy['holding']}")
-            st.write(f"**注意：** {strategy['warning']}")
+    c1, c2 = st.columns([2.2, 1])
+    with c1:
+        st.plotly_chart(price_chart(chart_df, ind), use_container_width=True)
+    with c2:
+        st.plotly_chart(score_gauge(ev["score"]), use_container_width=True)
+        st.info(f"**策略定位：{strategy['stance']}**")
+        st.write(f"**新進場：** {strategy['new_entry']}")
+        st.write(f"**已持有：** {strategy['holding']}")
+        st.write(f"**注意：** {strategy['warning']}")
 
-        t1, t2, t3 = st.tabs(["技術指標", "評分觸發", "風控"])
-        with t1:
-            st.dataframe(pd.DataFrame({
-                "指標": ["MA5", "MA20", "MA60", "布林上軌", "布林下軌", "RSI", "K", "D", "DIF", "MACD", "ATR"],
-                "數值": [
-                    ind["ma5"], ind["ma20"], ind["ma60"], ind["bb_up"], ind["bb_low"],
-                    ind["rsi"], ind["k_now"], ind["d_now"], ind["dif_now"], ind["macd_now"], ind["atr"],
-                ],
-            }), use_container_width=True, hide_index=True)
-        with t2:
-            st.success("看多訊號：" + ("、".join(ev["bull_signals"]) if ev["bull_signals"] else "無"))
-            st.error("看空訊號：" + ("、".join(ev["bear_signals"]) if ev["bear_signals"] else "無"))
-        with t3:
-            risk_pct = abs(ind["c_now"] - strategy["stop"]) / ind["c_now"] * 100
-            reward_pct = abs(strategy["target"] - ind["c_now"]) / ind["c_now"] * 100
-            rr = reward_pct / max(risk_pct, 0.5)
-            r1, r2, r3 = st.columns(3)
-            r1.metric("停損參考", f"{strategy['stop']:.2f}", f"-{risk_pct:.1f}%")
-            r2.metric("目標參考", f"{strategy['target']:.2f}", f"+{reward_pct:.1f}%")
-            r3.metric("風報比", f"{rr:.1f} : 1")
+    t1, t2, t3 = st.tabs(["技術指標", "評分觸發", "風控"])
+    with t1:
+        st.dataframe(pd.DataFrame({
+            "指標": ["MA5", "MA20", "MA60", "布林上軌", "布林下軌", "RSI", "K", "D", "DIF", "MACD", "ATR"],
+            "數值": [
+                ind["ma5"], ind["ma20"], ind["ma60"], ind["bb_up"], ind["bb_low"],
+                ind["rsi"], ind["k_now"], ind["d_now"], ind["dif_now"], ind["macd_now"], ind["atr"],
+            ],
+        }), use_container_width=True, hide_index=True)
+    with t2:
+        st.success("看多訊號：" + ("、".join(ev["bull_signals"]) if ev["bull_signals"] else "無"))
+        st.error("看空訊號：" + ("、".join(ev["bear_signals"]) if ev["bear_signals"] else "無"))
+    with t3:
+        risk_pct = abs(ind["c_now"] - strategy["stop"]) / ind["c_now"] * 100
+        reward_pct = abs(strategy["target"] - ind["c_now"]) / ind["c_now"] * 100
+        rr = reward_pct / max(risk_pct, 0.5)
+        r1, r2, r3 = st.columns(3)
+        r1.metric("停損參考", f"{strategy['stop']:.2f}", f"-{risk_pct:.1f}%")
+        r2.metric("目標參考", f"{strategy['target']:.2f}", f"+{reward_pct:.1f}%")
+        r3.metric("風報比", f"{rr:.1f} : 1")
 
-        st.divider()
-        st.subheader("🤖 AI 短線／長線分析")
-        st.caption("AI 為私人模式；只有輸入正確密碼後才會呼叫你的 OpenAI API。")
+    st.divider()
+    st.subheader("🤖 AI 短線／長線分析")
+    st.caption("AI 為私人模式；只有輸入正確密碼後才會呼叫你的 OpenAI API。")
 
-        if render_ai_login():
-            ai_key = f"ai_advice::{selected_market}::{stock_id}::{interval}"
-            if not get_secret("OPENAI_API_KEY"):
-                st.info("尚未設定 OPENAI_API_KEY。請到 Streamlit App Settings → Secrets 加入金鑰。")
-            else:
-                if st.button("🤖 產生 AI 短線＋長線建議", type="primary", key=f"ai_btn_{selected_market}_{stock_id}_{interval}"):
+    if render_ai_login():
+        ai_key = f"ai_advice::{selected_market}::{stock_id}::{interval}"
+        if not get_secret("OPENAI_API_KEY"):
+            st.info("尚未設定 OPENAI_API_KEY。請到 Streamlit App Settings → Secrets 加入金鑰。")
+        else:
+            if st.button(
+                "🤖 產生 AI 短線＋長線建議",
+                type="primary",
+                key=f"ai_btn_{selected_market}_{stock_id}_{interval}",
+            ):
+                try:
+                    with st.spinner("AI 正在整理短線與長線觀點..."):
+                        st.session_state[ai_key] = generate_ai_advice(
+                            stock_id, name, interval_label, ind, ev, strategy, selected_market
+                        )
+                except Exception as e:
+                    st.error(f"AI 分析目前無法使用：{e}")
+
+            if st.session_state.get(ai_key):
+                st.markdown(st.session_state[ai_key])
+                if st.button(
+                    "🔄 重新產生 AI 建議",
+                    key=f"ai_refresh_{selected_market}_{stock_id}_{interval}",
+                ):
                     try:
-                        with st.spinner("AI 正在整理短線與長線觀點..."):
+                        with st.spinner("重新產生 AI 分析..."):
                             st.session_state[ai_key] = generate_ai_advice(
                                 stock_id, name, interval_label, ind, ev, strategy, selected_market
                             )
+                        st.rerun()
                     except Exception as e:
                         st.error(f"AI 分析目前無法使用：{e}")
 
-                if st.session_state.get(ai_key):
-                    st.markdown(st.session_state[ai_key])
-                    if st.button("🔄 重新產生 AI 建議", key=f"ai_refresh_{selected_market}_{stock_id}_{interval}"):
-                        try:
-                            with st.spinner("重新產生 AI 分析..."):
-                                st.session_state[ai_key] = generate_ai_advice(
-                                    stock_id, name, interval_label, ind, ev, strategy, selected_market
-                                )
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"AI 分析目前無法使用：{e}")
 
+# =========================================================
+# 台股功能
+# =========================================================
+if selected_market == "🇹🇼 台股":
+    if subpage == "個股分析":
+        st.subheader("🇹🇼 台股個股分析")
+        render_stock_analysis("🇹🇼 台股")
 
-# -------------------------
-# 🇹🇼 台股個股
-# -------------------------
-if page == "🇹🇼 台股個股分析":
-    st.subheader("🇹🇼 台股個股分析")
-    render_stock_analysis("🇹🇼 台股")
+    elif subpage == "全市場掃描":
+        st.subheader("🇹🇼 台股全市場掃描＋大盤廣度")
+        st.caption(
+            "一次掃描台灣上市＋上櫃普通股，先以趨勢、漲幅、量能與流動性做第一階段快篩，"
+            "再對前 50 檔候選進行完整技術評分。大盤廣度與強勢股共用同一批全市場資料。"
+        )
 
-# -------------------------
-# 🇹🇼 台股全市場掃描
-# -------------------------
-elif page == "🇹🇼 台股全市場掃描":
-    st.subheader("🇹🇼 台股全市場掃描＋大盤廣度")
-    st.caption(
-        "一次掃描台灣上市＋上櫃普通股，先以趨勢、漲幅、量能與流動性做第一階段快篩，"
-        "再對前 50 檔候選進行完整技術評分。大盤廣度與強勢股使用同一批全市場資料。"
-    )
+        c1, c2 = st.columns([1, 3])
+        with c1:
+            if st.button("🚀 立即全市場重新掃描", type="primary", use_container_width=True):
+                run_full_market_scan.clear()
+                first_stage_market_scan.clear()
+                st.rerun()
+        with c2:
+            st.info("快取有效 30 分鐘；手動按重新掃描會立即清除快取並重新抓取。")
 
-    c1, c2 = st.columns([1, 3])
-    with c1:
-        if st.button("🚀 立即全市場重新掃描", type="primary", use_container_width=True):
-            run_full_market_scan.clear()
-            first_stage_market_scan.clear()
-            st.rerun()
-    with c2:
-        st.info("快取有效 30 分鐘；手動按重新掃描會立即清除快取並重新抓取。")
+        with st.spinner("正在掃描台股全市場，第一次可能需要一些時間..."):
+            scan = run_full_market_scan()
 
-    with st.spinner("正在掃描台股全市場，第一次可能需要一些時間..."):
-        scan = run_full_market_scan()
+        pct = scan["above_ma20"] / max(scan["valid_total"], 1) * 100
+        status = "🟢 多頭健康" if pct >= 50 else "🟡 震盪整理" if pct >= 30 else "🔴 空頭偏弱"
 
-    pct = scan["above_ma20"] / max(scan["valid_total"], 1) * 100
-    status = "🟢 多頭健康" if pct >= 50 else "🟡 震盪整理" if pct >= 30 else "🔴 空頭偏弱"
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("站上 MA20 比例", f"{pct:.1f}%")
+        m2.metric("有效市場樣本", scan["valid_total"])
+        m3.metric("第一階段候選", scan["candidates"])
+        m4.metric("資料更新時間", scan["updated"])
 
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("站上 MA20 比例", f"{pct:.1f}%")
-    m2.metric("有效市場樣本", scan["valid_total"])
-    m3.metric("第一階段候選", scan["candidates"])
-    m4.metric("資料更新時間", scan["updated"])
+        st.write(f"**市場狀態：{status}**")
+        st.caption(
+            "大盤廣度＝全市場中股價站上 20 日均線的股票比例。比例越高，代表上漲有較多股票共同參與；"
+            "比例偏低時，代表市場內部結構較弱。"
+        )
 
-    st.write(f"**市場狀態：{status}**")
-    st.caption(
-        "大盤廣度＝全市場中股價站上 20 日均線的股票比例。比例越高，代表上漲有較多股票共同參與；"
-        "比例偏低時，代表市場內部結構較弱。"
-    )
+        tab1, tab2 = st.tabs(["🔥 強勢多頭股", "🔻 多頭回調股"])
+        with tab1:
+            if scan["strong"].empty:
+                st.info("目前沒有符合條件的強勢多頭股。")
+            else:
+                st.dataframe(scan["strong"], use_container_width=True, hide_index=True)
+        with tab2:
+            if scan["pullback"].empty:
+                st.info("目前沒有符合條件的多頭回調股。")
+            else:
+                st.dataframe(scan["pullback"], use_container_width=True, hide_index=True)
 
-    tab1, tab2 = st.tabs(["🔥 強勢多頭股", "🔻 多頭回調股"])
-    with tab1:
-        if scan["strong"].empty:
-            st.info("目前沒有符合條件的強勢多頭股。")
-        else:
-            st.dataframe(scan["strong"], use_container_width=True, hide_index=True)
-    with tab2:
-        if scan["pullback"].empty:
-            st.info("目前沒有符合條件的多頭回調股。")
-        else:
-            st.dataframe(scan["pullback"], use_container_width=True, hide_index=True)
-
-# -------------------------
-# 🇺🇸 美股個股
-# -------------------------
-elif page == "🇺🇸 美股個股分析":
-    st.subheader("🇺🇸 美股個股分析")
-    st.caption("直接輸入 Yahoo Finance 美股代號，例如 AAPL、NVDA、MU、TSLA。")
-    render_stock_analysis("🇺🇸 美股")
-
-# -------------------------
-# 🇺🇸 美股市場總覽
-# -------------------------
-elif page == "🇺🇸 美股市場總覽":
-    st.subheader("🇺🇸 美股市場總覽＋熱門股雷達")
-    st.caption(
-        "這裡不是全美股掃描。上半部以 SPY、QQQ、DIA、IWM 觀察主要市場方向；"
-        "下半部使用高流動性熱門股建立強弱雷達。"
-    )
-
-    if st.button("🔄 更新美股市場資料", type="primary"):
-        get_us_index_overview.clear()
-        run_us_scan_cached.clear()
-        st.rerun()
-
-    st.markdown("### 📈 主要指數趨勢")
-    index_rows = get_us_index_overview()
-    if index_rows:
-        cols = st.columns(len(index_rows))
-        for col, row in zip(cols, index_rows):
-            with col:
-                st.metric(
-                    f"{row['ticker']} · {row['name']}",
-                    f"${row['price']:.2f}",
-                    f"{row['pct_ch']:+.2f}%",
-                )
-                st.caption(f"{row['trend']}｜評分 {row['score']:+.1f}｜RSI {row['rsi']:.1f}")
-    else:
-        st.info("目前無法取得美股主要指數資料。")
-
-    st.divider()
-    st.markdown("### 🔭 熱門股雷達")
-    with st.spinner("整理美股熱門股資料中..."):
-        us_scan = run_us_scan_cached()
-
-    us_pct = us_scan["above_ma20"] / max(us_scan["total"], 1) * 100
-    u1, u2, u3 = st.columns(3)
-    u1.metric("熱門股站上 MA20", f"{us_pct:.1f}%")
-    u2.metric("有效熱門股樣本", us_scan["total"])
-    u3.metric("資料更新時間", us_scan["time"])
-
-    tab1, tab2 = st.tabs(["🔥 熱門強勢股", "🔻 熱門股拉回"])
-    with tab1:
-        if us_scan["strong"]:
-            df_us_strong = pd.DataFrame(us_scan["strong"]).copy()
-            df_us_strong = df_us_strong.rename(columns={
-                "ticker": "代號", "name": "名稱", "price": "現價", "pct_ch": "漲跌%",
-                "score": "評分", "rsi": "RSI", "vol_ratio": "量比"
-            })
-            show_cols = [c for c in ["代號", "名稱", "現價", "漲跌%", "評分", "RSI", "量比"] if c in df_us_strong.columns]
-            st.dataframe(df_us_strong[show_cols], use_container_width=True, hide_index=True)
-        else:
-            st.info("目前熱門股池中沒有符合條件的強勢股。")
-
-    with tab2:
-        if us_scan["pullback"]:
-            df_us_pull = pd.DataFrame(us_scan["pullback"]).copy()
-            df_us_pull = df_us_pull.rename(columns={
-                "ticker": "代號", "name": "名稱", "price": "現價", "pct_ch": "漲跌%",
-                "score": "評分", "rsi": "RSI", "vol_ratio": "量比"
-            })
-            show_cols = [c for c in ["代號", "名稱", "現價", "漲跌%", "評分", "RSI", "量比"] if c in df_us_pull.columns]
-            st.dataframe(df_us_pull[show_cols], use_container_width=True, hide_index=True)
-        else:
-            st.info("目前熱門股池中沒有符合條件的拉回股。")
-
-# -------------------------
-# 評分規則
-# -------------------------
-elif page == "📖 評分規則":
-    st.subheader("📖 多因子技術動能評分規則（-5 至 +5）")
-    st.markdown(
-        """
+    elif subpage == "評分規則":
+        st.subheader("📖 台股評分規則")
+        st.markdown(
+            """
 **1. 均線趨勢（MA5 / MA20 / MA60）**
 - 均線多頭排列：+1.5
 - 站上月線：+1.0
@@ -1332,8 +1334,97 @@ elif page == "📖 評分規則":
 - 成交量 ≥ 20 日均量 1.5 倍且上漲：+1.0
 - 觸及布林下軌：+0.5
 - 突破布林上軌且乖離過大：-0.5
-        """
-    )
+            """
+        )
+
+# =========================================================
+# 美股功能
+# =========================================================
+else:
+    if subpage == "個股分析":
+        st.subheader("🇺🇸 美股個股分析")
+        st.caption("直接輸入 Yahoo Finance 美股代號，例如 AAPL、NVDA、MU、TSLA。")
+        render_stock_analysis("🇺🇸 美股")
+
+    elif subpage == "市場總覽":
+        st.subheader("🇺🇸 美股市場總覽＋熱門股雷達")
+        st.caption(
+            "這裡不是全美股掃描。上半部以 SPY、QQQ、DIA、IWM 觀察主要市場方向；"
+            "下半部使用高流動性熱門股建立強弱雷達。"
+        )
+
+        if st.button("🔄 更新美股市場資料", type="primary"):
+            get_us_index_overview.clear()
+            run_us_scan_cached.clear()
+            st.rerun()
+
+        st.markdown("### 📈 主要指數趨勢")
+        index_rows = get_us_index_overview()
+        if index_rows:
+            cols = st.columns(len(index_rows))
+            for col, row in zip(cols, index_rows):
+                with col:
+                    st.metric(
+                        f"{row['ticker']} · {row['name']}",
+                        f"${row['price']:.2f}",
+                        f"{row['pct_ch']:+.2f}%",
+                    )
+                    st.caption(f"{row['trend']}｜評分 {row['score']:+.1f}｜RSI {row['rsi']:.1f}")
+        else:
+            st.info("目前無法取得美股主要指數資料。")
+
+        st.divider()
+        st.markdown("### 🔭 熱門股雷達")
+        with st.spinner("整理美股熱門股資料中..."):
+            us_scan = run_us_scan_cached()
+
+        us_pct = us_scan["above_ma20"] / max(us_scan["total"], 1) * 100
+        u1, u2, u3 = st.columns(3)
+        u1.metric("熱門股站上 MA20", f"{us_pct:.1f}%")
+        u2.metric("有效熱門股樣本", us_scan["total"])
+        u3.metric("資料更新時間", us_scan["time"])
+
+        tab1, tab2 = st.tabs(["🔥 熱門強勢股", "🔻 熱門股拉回"])
+        with tab1:
+            if us_scan["strong"]:
+                df_us_strong = pd.DataFrame(us_scan["strong"]).copy()
+                df_us_strong = df_us_strong.rename(columns={
+                    "ticker": "代號", "name": "名稱", "price": "現價", "pct_ch": "漲跌%",
+                    "score": "評分", "rsi": "RSI", "vol_ratio": "量比"
+                })
+                show_cols = [c for c in ["代號", "名稱", "現價", "漲跌%", "評分", "RSI", "量比"] if c in df_us_strong.columns]
+                st.dataframe(df_us_strong[show_cols], use_container_width=True, hide_index=True)
+            else:
+                st.info("目前熱門股池中沒有符合條件的強勢股。")
+
+        with tab2:
+            if us_scan["pullback"]:
+                df_us_pull = pd.DataFrame(us_scan["pullback"]).copy()
+                df_us_pull = df_us_pull.rename(columns={
+                    "ticker": "代號", "name": "名稱", "price": "現價", "pct_ch": "漲跌%",
+                    "score": "評分", "rsi": "RSI", "vol_ratio": "量比"
+                })
+                show_cols = [c for c in ["代號", "名稱", "現價", "漲跌%", "評分", "RSI", "量比"] if c in df_us_pull.columns]
+                st.dataframe(df_us_pull[show_cols], use_container_width=True, hide_index=True)
+            else:
+                st.info("目前熱門股池中沒有符合條件的拉回股。")
+
+    elif subpage == "評分規則":
+        st.subheader("📖 美股評分規則")
+        st.caption("美股個股分析目前沿用與台股相同的技術面多因子評分邏輯。")
+        st.markdown(
+            """
+**核心評分因子**
+- MA5 / MA20 / MA60 趨勢
+- RSI
+- KD
+- MACD
+- 成交量
+- 布林通道
+
+評分範圍：**-5 ～ +5**
+            """
+        )
 
 st.divider()
 st.caption(
