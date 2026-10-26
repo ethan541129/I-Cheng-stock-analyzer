@@ -1,5 +1,7 @@
 import math
 import re
+import os
+import json
 import datetime
 from datetime import timedelta, timezone
 
@@ -8,6 +10,11 @@ import pandas as pd
 import streamlit as st
 import yfinance as yf
 import plotly.graph_objects as go
+
+try:
+    from openai import OpenAI
+except Exception:
+    OpenAI = None
 
 try:
     import twstock
@@ -357,8 +364,8 @@ def build_trading_strategy(ind: dict, ev: dict) -> dict:
 def load_favorites() -> list[str]:
     """讀取目前訪客這個 Streamlit session 的自選股。"""
     if "favorites" not in st.session_state:
-        st.session_state["favorites"] = []
-    return list(st.session_state["favorites"])
+        st.session_state["favorites_by_market"][market] = []
+    return list(st.session_state["favorites_by_market"][market])
 
 
 def save_favorites(items: list[str]) -> None:
@@ -368,7 +375,7 @@ def save_favorites(items: list[str]) -> None:
         x = str(x).strip()
         if re.fullmatch(r"\d{4,6}", x) and x not in cleaned:
             cleaned.append(x)
-    st.session_state["favorites"] = cleaned
+    st.session_state["favorites_by_market"][market] = cleaned
 
 
 def add_favorite(stock_id: str) -> bool:
@@ -385,6 +392,302 @@ def add_favorite(stock_id: str) -> bool:
 def remove_favorite(stock_id: str) -> None:
     favs = [x for x in load_favorites() if x != str(stock_id)]
     save_favorites(favs)
+
+
+
+
+
+# =========================================================
+# 市場切換：台股 / 美股
+# =========================================================
+def normalize_symbol_by_market(stock_id: str, market: str) -> str:
+    stock_id = stock_id.strip().upper()
+    if market == "🇺🇸 美股":
+        return stock_id
+    return stock_id
+
+
+def resolve_name_by_market(stock_id: str, market: str) -> str:
+    sid = stock_id.strip().upper()
+    if market == "🇺🇸 美股":
+        if sid in US_LOOKUP:
+            return US_LOOKUP[sid]
+        try:
+            info = yf.Ticker(sid).fast_info
+            # fast_info often lacks name; fall back to info only if needed
+            name = yf.Ticker(sid).info.get("shortName") or yf.Ticker(sid).info.get("longName")
+            if name:
+                return str(name)
+        except Exception:
+            pass
+        return sid
+    try:
+        return resolve_stock_name(sid)
+    except Exception:
+        return sid
+
+
+def fetch_market_df(stock_id: str, market: str, interval: str = "1d", period: str = "6mo") -> pd.DataFrame:
+    """市場共用抓價。台股沿用 .TW/.TWO；美股直接使用 Yahoo ticker。"""
+    sid = stock_id.strip().upper()
+    if market == "🇺🇸 美股":
+        try:
+            df = yf.download(
+                sid,
+                period=period,
+                interval=interval,
+                auto_adjust=False,
+                progress=False,
+                threads=False,
+            )
+            if df is None or df.empty:
+                return pd.DataFrame()
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.get_level_values(0)
+            required = [c for c in ["Close", "High", "Low"] if c in df.columns]
+            if len(required) < 3:
+                return pd.DataFrame()
+            df = df.dropna(subset=required).copy()
+            if "Volume" not in df.columns:
+                df["Volume"] = 0.0
+            else:
+                df["Volume"] = df["Volume"].fillna(0)
+            return df
+        except Exception:
+            return pd.DataFrame()
+
+    # 台股：使用既有函式
+    try:
+        # 既有 fetch_stock_df 有些版本是 async；Streamlit 版通常為同步函式。
+        result = fetch_stock_df(sid, interval=interval, period=period)
+        return result
+    except TypeError:
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def run_us_scan_cached() -> dict:
+    """美股掃描中心：掃描高流動性代表性股票池。個股分析本身不限此清單。"""
+    rows = []
+    above_ma20 = 0
+    total = 0
+
+    for ticker, name in US_QUICK_POOL:
+        df = fetch_market_df(ticker, "🇺🇸 美股", interval="1d", period="6mo")
+        if df.empty or len(df) < 25:
+            continue
+        try:
+            ind = calculate_indicators(df)
+            ev = evaluate_score(ind)
+            total += 1
+            if ind["c_now"] > ind["ma20"]:
+                above_ma20 += 1
+
+            pct_ch = (ind["c_now"] - ind["c_prev"]) / max(ind["c_prev"], 1e-9) * 100
+            item = {
+                "ticker": ticker,
+                "name": name,
+                "price": ind["c_now"],
+                "pct_ch": pct_ch,
+                "score": ev["score"],
+                "rsi": ind["rsi"],
+                "vol_ratio": ev["vol_ratio"],
+                "ma20": ind["ma20"],
+                "ma60": ind["ma60"],
+            }
+            rows.append(item)
+        except Exception:
+            continue
+
+    strong = [r for r in rows if r["score"] >= 1.5 and r["price"] > r["ma20"]]
+    pullback = [r for r in rows if 0 <= r["score"] < 2.0 and r["price"] > r["ma60"] and r["pct_ch"] < 0]
+    strong.sort(key=lambda r: r["score"], reverse=True)
+    pullback.sort(key=lambda r: r["score"], reverse=True)
+
+    return {
+        "rows": rows,
+        "strong": strong,
+        "pullback": pullback,
+        "above_ma20": above_ma20,
+        "total": total,
+        "time": datetime.datetime.now(TW_TZ).strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+
+# =========================================================
+# AI 存取密碼保護
+# =========================================================
+def ai_access_unlocked() -> bool:
+    return bool(st.session_state.get("ai_access_unlocked", False))
+
+
+def render_ai_login() -> bool:
+    expected_password = get_secret("AI_ACCESS_PASSWORD")
+
+    if not expected_password:
+        st.warning("尚未設定 AI_ACCESS_PASSWORD，AI 功能目前鎖定。")
+        return False
+
+    if ai_access_unlocked():
+        c1, c2 = st.columns([4, 1])
+        with c1:
+            st.success("🔓 AI 功能已解鎖")
+        with c2:
+            if st.button("登出 AI", key="ai_logout_btn"):
+                st.session_state["ai_access_unlocked"] = False
+                st.rerun()
+        return True
+
+    password = st.text_input(
+        "AI 使用密碼",
+        type="password",
+        placeholder="輸入密碼後才能使用 AI",
+        key="ai_access_password_input",
+    )
+
+    if st.button("🔐 解鎖 AI 功能", key="ai_unlock_btn"):
+        if password == expected_password:
+            st.session_state["ai_access_unlocked"] = True
+            st.success("AI 功能已解鎖。")
+            st.rerun()
+        else:
+            st.error("密碼不正確。")
+
+    return False
+
+
+# =========================================================
+# AI 分析（OpenAI Responses API）
+# =========================================================
+def get_secret(name: str, default=None):
+    """Streamlit Cloud 優先讀取 Secrets；本機則可使用環境變數。"""
+    try:
+        value = st.secrets.get(name, default)
+        if value is not None:
+            return value
+    except Exception:
+        pass
+    return os.getenv(name, default)
+
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def fetch_fundamentals(stock_id: str, market: str = "🇹🇼 台股") -> dict:
+    """抓取可用的基本面摘要；Yahoo 無資料時回傳空值，不影響技術分析。"""
+    out = {}
+    if market == "🇺🇸 美股":
+        symbol = stock_id.strip().upper()
+    else:
+        suffixes = suffix_candidates(stock_id)
+        if not suffixes:
+            return out
+        symbol = f"{stock_id}{suffixes[0]}"
+    try:
+        info = yf.Ticker(symbol).info or {}
+    except Exception:
+        return out
+
+    fields = {
+        "marketCap": "市值",
+        "trailingPE": "本益比(TTM)",
+        "forwardPE": "預估本益比",
+        "priceToBook": "股價淨值比",
+        "revenueGrowth": "營收年增率",
+        "earningsGrowth": "獲利年增率",
+        "returnOnEquity": "ROE",
+        "debtToEquity": "負債權益比",
+        "profitMargins": "淨利率",
+        "dividendYield": "股息殖利率",
+    }
+    for key, label in fields.items():
+        value = info.get(key)
+        if value is not None:
+            out[label] = value
+    return out
+
+
+def build_ai_payload(stock_id: str, stock_name: str, interval_label: str, ind: dict, ev: dict, strategy: dict, fundamentals: dict) -> dict:
+    return {
+        "股票": f"{stock_name} ({stock_id})",
+        "K線週期": interval_label,
+        "資料時間": datetime.datetime.now(TW_TZ).strftime("%Y-%m-%d %H:%M:%S"),
+        "技術資料": {
+            "現價": round(ind["c_now"], 2),
+            "前一根收盤": round(ind["c_prev"], 2),
+            "MA5": round(ind["ma5"], 2),
+            "MA20": round(ind["ma20"], 2),
+            "MA60": round(ind["ma60"], 2),
+            "布林上軌": round(ind["bb_up"], 2),
+            "布林下軌": round(ind["bb_low"], 2),
+            "RSI": round(ind["rsi"], 1),
+            "K": round(ind["k_now"], 1),
+            "D": round(ind["d_now"], 1),
+            "DIF": round(ind["dif_now"], 3),
+            "MACD": round(ind["macd_now"], 3),
+            "ATR": round(ind["atr"], 2),
+            "量比": round(ev["vol_ratio"], 2),
+            "量化評分": ev["score"],
+            "多頭強度%": round(ev["bull_pct"], 0),
+            "看多訊號": ev["bull_signals"],
+            "看空訊號": ev["bear_signals"],
+        },
+        "原量化策略": {
+            "定位": strategy["stance"],
+            "新進場": strategy["new_entry"],
+            "已持有": strategy["holding"],
+            "注意": strategy["warning"],
+            "停損參考": round(strategy["stop"], 2),
+            "目標參考": round(strategy["target"], 2),
+        },
+        "可取得基本面": fundamentals,
+    }
+
+
+def generate_ai_advice(stock_id: str, stock_name: str, interval_label: str, ind: dict, ev: dict, strategy: dict, market: str = "🇹🇼 台股") -> str:
+    api_key = get_secret("OPENAI_API_KEY")
+    model = get_secret("OPENAI_MODEL", "gpt-6-luna")
+
+    if not api_key:
+        raise RuntimeError("尚未設定 OPENAI_API_KEY。")
+    if OpenAI is None:
+        raise RuntimeError("尚未安裝 openai 套件，請更新 requirements.txt。")
+
+    fundamentals = fetch_fundamentals(stock_id, market)
+    payload = build_ai_payload(stock_id, stock_name, interval_label, ind, ev, strategy, fundamentals)
+
+    instructions = """
+你是台股研究助理。只能根據使用者提供的量化技術資料與可取得的基本面摘要分析，
+不得假裝知道未提供的即時新聞、法人籌碼、財報細節或未提供的價格資料。
+請用繁體中文，內容清楚、具體，但不要保證獲利。
+
+請固定輸出：
+## ⚡ 短線觀點
+- 趨勢判斷：
+- 新進場策略：
+- 已持有策略：
+- 關鍵支撐／轉弱條件：
+- 短線風險：
+
+## 🌳 長線觀點
+- 中長期趨勢：
+- 基本面可見資訊：
+- 適合的操作方式：
+- 長線轉強條件：
+- 長線風險：
+
+## 🎯 AI 結論
+用 2～4 句總結「偏多／中性／偏空」以及最重要的觀察點。
+
+短線以數天到數週為主；長線以數月以上為主。
+若基本面資料不足，要明確寫「基本面資料不足」，不要用技術指標冒充完整基本面分析。
+"""
+
+    client = OpenAI(api_key=api_key)
+    response = client.responses.create(
+        model=model,
+        instructions=instructions,
+        input=json.dumps(payload, ensure_ascii=False),
+    )
+    return response.output_text.strip()
 
 
 # =========================================================
@@ -595,6 +898,27 @@ def calculate_market_breadth():
 # =========================================================
 # Streamlit UI
 # =========================================================
+
+# 美股高流動性示範股票池（用於美股掃描中心；個股查詢不限此清單）
+US_QUICK_POOL = [
+    ("AAPL", "Apple"), ("MSFT", "Microsoft"), ("NVDA", "NVIDIA"),
+    ("AMZN", "Amazon"), ("META", "Meta"), ("GOOGL", "Alphabet"),
+    ("GOOG", "Alphabet C"), ("TSLA", "Tesla"), ("AVGO", "Broadcom"),
+    ("AMD", "AMD"), ("NFLX", "Netflix"), ("CRM", "Salesforce"),
+    ("ORCL", "Oracle"), ("ADBE", "Adobe"), ("QCOM", "Qualcomm"),
+    ("INTC", "Intel"), ("MU", "Micron"), ("AMAT", "Applied Materials"),
+    ("LRCX", "Lam Research"), ("KLAC", "KLA"), ("PANW", "Palo Alto Networks"),
+    ("CRWD", "CrowdStrike"), ("PLTR", "Palantir"), ("UBER", "Uber"),
+    ("SHOP", "Shopify"), ("COIN", "Coinbase"), ("JPM", "JPMorgan"),
+    ("BAC", "Bank of America"), ("GS", "Goldman Sachs"), ("V", "Visa"),
+    ("MA", "Mastercard"), ("WMT", "Walmart"), ("COST", "Costco"),
+    ("HD", "Home Depot"), ("LLY", "Eli Lilly"), ("UNH", "UnitedHealth"),
+    ("JNJ", "Johnson & Johnson"), ("XOM", "Exxon Mobil"), ("CVX", "Chevron"),
+    ("CAT", "Caterpillar"), ("GE", "GE Aerospace"), ("BA", "Boeing"),
+    ("SPY", "SPDR S&P 500 ETF"), ("QQQ", "Invesco QQQ"),
+]
+US_LOOKUP = {ticker: name for ticker, name in US_QUICK_POOL}
+
 st.set_page_config(
     page_title="I-Cheng Stock Bot",
     page_icon="📈",
@@ -616,6 +940,10 @@ def open_favorite(stock_id: str):
 # 左側導覽 + 自選股
 # -------------------------
 st.sidebar.title("📈 I-Cheng Stock Bot")
+if "favorites_by_market" not in st.session_state:
+    st.session_state["favorites_by_market"] = {"🇹🇼 台股": [], "🇺🇸 美股": []}
+
+market = st.sidebar.radio("市場", ["🇹🇼 台股", "🇺🇸 美股"], horizontal=True, key="market_selector")
 page = st.sidebar.radio(
     "功能選單",
     ["個股分析", "掃描中心＋大盤廣度", "評分規則"],
@@ -657,7 +985,7 @@ st.sidebar.caption("自選股只屬於目前訪客的使用階段，不與其他
 # 頁首
 # -------------------------
 st.title("📈 I-Cheng Stock Bot")
-st.caption("台股量化技術分析｜MA / RSI / KD / MACD / 布林通道 / 成交量｜全市場兩階段掃描")
+st.caption("台股 / 美股量化技術分析｜AI 短線 / 長線觀點｜MA / RSI / KD / MACD / 布林通道 / 成交量｜全市場兩階段掃描")
 
 if page == "個股分析":
     col1, col2 = st.columns([1, 3])
@@ -684,7 +1012,7 @@ if page == "個股分析":
             ev = evaluate_score(ind)
             strategy = build_trading_strategy(ind, ev)
             pct_ch = (ind["c_now"] - ind["c_prev"]) / max(ind["c_prev"], 1e-10) * 100
-            name = resolve_stock_name(stock_id)
+            name = resolve_name_by_market(stock_id, market)
 
             st.subheader(f"{name} ({stock_id})")
             m1, m2, m3, m4, m5 = st.columns(5)
@@ -725,103 +1053,45 @@ if page == "個股分析":
                 r2.metric("目標參考", f"{strategy['target']:.2f}", f"+{reward_pct:.1f}%")
                 r3.metric("風報比", f"{rr:.1f} : 1")
 
-elif page == "掃描中心＋大盤廣度":
-    st.subheader("📊 全市場掃描中心＋大盤廣度")
-    st.markdown(
-        """
-這裡把 **全市場選股** 與 **大盤廣度** 整合成同一次資料更新：
+            st.divider()
+            st.subheader("🤖 AI 短線／長線分析")
+            st.caption(
+                "AI 功能已設為私人模式。一般訪客只能使用量化分析；"
+                "只有輸入正確密碼後，才會顯示 AI 分析按鈕並呼叫你的 OpenAI API。"
+            )
 
-- 第一階段掃描上市／上櫃股票，依趨勢、5/20 日漲幅、量能與流動性排序，保留前 50 檔候選。
-- 第二階段對候選股套用完整 MA / RSI / KD / MACD / 布林 / 成交量評分。
-- **大盤廣度** 同時統計全市場「股價站上 20 日均線（MA20）」的比例，不另外重掃一次。
-- 廣度越高，代表上漲有較多股票共同參與；廣度偏低，代表市場可能只有少數股票撐盤。
-- 資料快取有效 **30 分鐘**；超過 30 分鐘後，再次進入本頁會取得新一批資料。也可隨時手動重新掃描。
-        """
-    )
+            if render_ai_login():
+                ai_key = f"ai_advice::{stock_id}::{interval}"
 
-    force_scan = st.button("🚀 立即全市場重新掃描", type="primary", use_container_width=False)
-    if force_scan:
-        first_stage_market_scan.clear()
-        run_full_market_scan.clear()
-        st.session_state.pop("market_scan_result", None)
+                if not get_secret("OPENAI_API_KEY"):
+                    st.info("尚未設定 OPENAI_API_KEY。請到 Streamlit App Settings → Secrets 加入金鑰。")
+                else:
+                    if st.button(
+                        "🤖 產生 AI 短線＋長線建議",
+                        type="primary",
+                        key=f"ai_btn_{stock_id}_{interval}"
+                    ):
+                        try:
+                            with st.spinner("AI 正在整理短線與長線觀點..."):
+                                st.session_state[ai_key] = generate_ai_advice(
+                                    stock_id, name, interval_label, ind, ev, strategy, market
+                                )
+                        except Exception as e:
+                            st.error(f"AI 分析目前無法使用：{e}")
 
-    result = st.session_state.get("market_scan_result")
-    stale = True
-    if result and result.get("updated"):
-        try:
-            dt = datetime.datetime.strptime(result["updated"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=TW_TZ)
-            stale = (datetime.datetime.now(TW_TZ) - dt).total_seconds() >= SCAN_CACHE_MINUTES * 60
-        except Exception:
-            stale = True
+                    if st.session_state.get(ai_key):
+                        st.markdown(st.session_state[ai_key])
 
-    if force_scan or result is None or stale:
-        with st.spinner("正在掃描上市／上櫃市場並同步計算大盤廣度..."):
-            result = run_full_market_scan()
-        st.session_state["market_scan_result"] = result
-
-    if result:
-        pct = result["above_ma20"] / max(result["valid_total"], 1) * 100
-        status = "🟢 多頭健康" if pct >= 50 else "🟡 震盪整理" if pct >= 30 else "🔴 空頭偏弱"
-
-        st.caption(f"🕒 全市場資料更新時間：{result['updated']}（同一批資料供選股與大盤廣度使用）")
-
-        a1, a2, a3, a4 = st.columns(4)
-        a1.metric("大盤廣度｜站上 MA20", f"{pct:.1f}%")
-        a2.metric("站上 MA20 檔數", result["above_ma20"])
-        a3.metric("有效市場樣本", result["valid_total"])
-        a4.metric("市場狀態", status)
-        st.progress(min(max(pct / 100, 0.0), 1.0))
-
-        st.divider()
-        c1, c2, c3 = st.columns(3)
-        c1.metric("第一階段候選", result["candidates"])
-        c2.metric("🔥 強勢多頭股", len(result["strong"]))
-        c3.metric("🔻 多頭回調股", len(result["pullback"]))
-
-        tab1, tab2 = st.tabs(["🔥 強勢多頭", "🔻 多頭回調"])
-        with tab1:
-            st.caption("完整評分達強勢門檻、且股價站上 MA20 的候選股。")
-            if result["strong"].empty:
-                st.info("目前沒有符合條件的強勢股。")
-            else:
-                st.dataframe(result["strong"], use_container_width=True, hide_index=True)
-        with tab2:
-            st.caption("中期仍在多頭架構，但當日回檔、評分尚未達強勢門檻的候選股。")
-            if result["pullback"].empty:
-                st.info("目前沒有符合條件的回調股。")
-            else:
-                st.dataframe(result["pullback"], use_container_width=True, hide_index=True)
-
-elif page == "評分規則":
-    st.subheader("📖 多因子技術動能評分規則（-5 至 +5）")
-    st.markdown("""
-**1. 均線趨勢**
-- 均線多頭排列：+1.5
-- 站上 MA20：+1.0
-- 均線空頭排列：-1.5
-- 跌破 MA20：-1.0
-
-**2. RSI**
-- 55～75：+1.0
-- < 30：+1.0
-- > 80：-1.0
-- < 45：-0.5
-
-**3. KD**
-- 黃金交叉：+1.0
-- K > D：+0.5
-- 死亡交叉：-1.0
-- K < D：-0.5
-
-**4. MACD**
-- DIF > MACD：+1.0
-- DIF < MACD：-1.0
-
-**5. 成交量與布林**
-- 量達 20 日均量 1.5 倍且上漲：+1.0
-- 跌破布林下軌：+0.5
-- 突破布林上軌：-0.5
-""")
-
-st.divider()
-st.caption("⚠️ 本網站為技術分析與課程展示用途，不構成投資建議。")
+                        if st.button(
+                            "🔄 重新產生 AI 建議",
+                            key=f"ai_refresh_{stock_id}_{interval}"
+                        ):
+                            try:
+                                with st.spinner("重新產生 AI 分析..."):
+                                    st.session_state[ai_key] = generate_ai_advice(
+                                        stock_id, name, interval_label, ind, ev, strategy, market
+                                    )
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"AI 分析目前無法使用：{e}")
+st.caption("⚠️ 本網站與 AI 內容為量化研究、技術分析與課程展示用途；AI 可能出錯，請自行查證，不構成保證獲利或個人化投資建議。")
