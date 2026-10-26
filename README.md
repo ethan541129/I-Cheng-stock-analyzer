@@ -1,4 +1,4 @@
-# I-Cheng Stock Bot
+# I-Cheng Stock analyzer
 
 A Python-based stock analysis project that combines quantitative technical analysis, market screening, interactive visualization, and optional AI-assisted insights.
 
