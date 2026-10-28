@@ -1005,6 +1005,17 @@ def remove_combined_favorite(ticker: str, market: str) -> None:
     save_combined_favorites(favs)
 
 
+def navigate_to_favorite(ticker: str, market: str) -> None:
+    """Widget callback executes before Streamlit instantiates widgets on the next rerun."""
+    st.session_state["top_market_selector"] = market
+    if market == "TW Stock":
+        st.session_state["tw_subpage"] = "Individual Stock Analysis"
+        st.session_state["tw_stock_id"] = ticker
+    else:
+        st.session_state["us_subpage"] = "Individual Stock Analysis"
+        st.session_state["us_stock_id"] = ticker
+
+
 # =========================================================
 # Sidebar Navigation: Select Market, Then Market-Specific Function
 # =========================================================
@@ -1064,23 +1075,14 @@ else:
         f_market = item["market"]
         sid = item["ticker"]
         name = resolve_name_by_market(sid, f_market)
-        flag = "🇹🇼" if f_market == "TW Stock" else "🇺🇸"
-
         c1, c2 = st.sidebar.columns([4, 1])
-        if c1.button(
-            f"{flag} {name} ({sid})",
+        c1.button(
+            f"{f_market} {name} ({sid})",
             key=f"fav_open_{f_market}_{sid}",
             use_container_width=True,
-        ):
-            if f_market == "TW Stock":
-                st.session_state["top_market_selector"] = "TW Stock"
-                st.session_state["tw_subpage"] = "Individual Stock Analysis"
-                st.session_state["tw_stock_id"] = sid
-            else:
-                st.session_state["top_market_selector"] = "US Stock"
-                st.session_state["us_subpage"] = "Individual Stock Analysis"
-                st.session_state["us_stock_id"] = sid
-            st.rerun()
+            on_click=navigate_to_favorite,
+            args=(sid, f_market),
+        )
 
         if c2.button("✕", key=f"fav_del_{f_market}_{sid}", help=f"Remove {name}"):
             remove_combined_favorite(sid, f_market)
