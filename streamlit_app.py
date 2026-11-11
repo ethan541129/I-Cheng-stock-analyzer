@@ -216,13 +216,13 @@ def evaluate_score(ind: dict) -> dict:
 
     if c > ma5 > ma20 > ma60:
         score += 1.5
-        bull_signals.append("Bullish moving-average alignment (+1.5)")
+        bull_signals.append("Price > MA5 > MA20 > MA60 (+1.5)")
     elif c > ma20:
         score += 1.0
         bull_signals.append("Price above MA20 (+1.0)")
     elif c < ma5 < ma20 < ma60:
         score -= 1.5
-        bear_signals.append("Bearish moving-average alignment (-1.5)")
+        bear_signals.append("Price < MA5 < MA20 < MA60 (-1.5)")
     else:
         score -= 1.0
         bear_signals.append("Price below MA20 (-1.0)")
@@ -230,31 +230,31 @@ def evaluate_score(ind: dict) -> dict:
     rsi = ind["rsi"]
     if 55 <= rsi <= 75:
         score += 1.0
-        bull_signals.append("RSI in strong bullish zone (+1.0)")
+        bull_signals.append("RSI between 55 and 75 (+1.0)")
     elif rsi < 30:
         score += 1.0
-        bull_signals.append("RSI oversold rebound signal (+1.0)")
+        bull_signals.append("Oversold RSI, possible rebound (+1.0)")
     elif rsi > 80:
         score -= 1.0
-        bear_signals.append("RSI overbought / overheated (-1.0)")
+        bear_signals.append("Overbought RSI (-1.0)")
     elif rsi < 45:
         score -= 0.5
-        bear_signals.append("RSI momentum weak (-0.5)")
+        bear_signals.append("Weak RSI momentum (-0.5)")
 
     k_n, d_n = ind["k_now"], ind["d_now"]
     k_p, d_p = ind["k_prev"], ind["d_prev"]
     if k_p < d_p and k_n > d_n:
         score += 1.0
-        bull_signals.append("KD golden cross (+1.0)")
+        bull_signals.append("KD golden cross (K crossed above D) (+1.0)")
     elif k_n > d_n:
         score += 0.5
-        bull_signals.append("KD bullish structure (+0.5)")
+        bull_signals.append("K is above D (+0.5)")
     elif k_p > d_p and k_n < d_n:
         score -= 1.0
-        bear_signals.append("KD death cross (-1.0)")
+        bear_signals.append("KD death cross (K crossed below D) (-1.0)")
     else:
         score -= 0.5
-        bear_signals.append("KD bearish structure (-0.5)")
+        bear_signals.append("K is at or below D (-0.5)")
 
     if ind["dif_now"] > ind["macd_now"]:
         score += 1.0
@@ -266,13 +266,13 @@ def evaluate_score(ind: dict) -> dict:
     vol_ratio = ind["vol_now"] / ind["vol_ma20"]
     if vol_ratio >= 1.5 and c > ind["c_prev"]:
         score += 1.0
-        bull_signals.append(f"High-volume advance {vol_ratio:.1f}x average volume (+1.0)")
+        bull_signals.append(f"Price rose on {vol_ratio:.1f}× the 20-period average volume (+1.0)")
     elif c < ind["bb_low"]:
         score += 0.5
-        bull_signals.append("Near lower Bollinger Band support (+0.5)")
+        bull_signals.append("Price below the lower Bollinger Band (+0.5)")
     elif c > ind["bb_up"]:
         score -= 0.5
-        bear_signals.append("Overextended above upper Bollinger Band (-0.5)")
+        bear_signals.append("Price above the upper Bollinger Band (-0.5)")
 
     final_score = max(-5.0, min(5.0, round(score, 1)))
     return {
@@ -294,43 +294,43 @@ def build_trading_strategy(ind: dict, ev: dict) -> dict:
     buy_low, buy_high = min(ma5, ma20), max(ma5, ma20)
 
     if score >= 3.0 and c > ma20:
-        stance = "🟢 Bullish / Hold"
-        new_entry = f"Avoid chasing; consider scaling in after a pullback to {buy_low:.2f}～{buy_high:.2f} if price stabilizes."
-        holding = f"Hold existing positions; near {target:.2f} consider partial profit-taking; reduce or exit below {stop:.2f}."
+        stance = "🟢 Bullish / hold"
+        new_entry = f"Avoid chasing the price. If it pulls back to the {buy_low:.2f} to {buy_high:.2f} range and steadies, consider buying in stages."
+        holding = f"Hold for now. Consider taking some profits near {target:.2f}. Trim or close the position if the price falls below {stop:.2f}."
     elif score >= 1.5 and c > ma20:
-        stance = "🟡 Buy on Pullback"
-        new_entry = f"Wait for a pullback toward {buy_low:.2f}～{buy_high:.2f} and consider scaling in after stabilization."
-        holding = f"May continue holding without chasing; reduce if price falls below MA20 {ma20:.2f}, with {stop:.2f} as the defensive level."
+        stance = "🟡 Buy on a pullback"
+        new_entry = f"Wait for a pullback toward the {buy_low:.2f} to {buy_high:.2f} range. If the price steadies, consider buying in stages."
+        holding = f"You can keep holding at your current position size. Trim it if the price falls below MA20 ({ma20:.2f}) and use {stop:.2f} as the stop level."
     elif score >= 0.5:
-        stance = "🟡 Small Position / Wait for Confirmation"
-        new_entry = f"Start with a small position; add only after holding above MA20 {ma20:.2f} with improving volume."
-        holding = f"Hold and monitor; reduce exposure if price cannot hold {ma20:.2f}."
+        stance = "🟡 Small position / wait for confirmation"
+        new_entry = f"Start small. Add only if the price holds above MA20 ({ma20:.2f}) and volume picks up."
+        holding = f"Hold for now and trim the position if the price falls below {ma20:.2f}."
     elif score <= -2.5:
-        stance = "🔴 Bearish / Avoid"
-        new_entry = f"Avoid new entries until price reclaims MA20 {ma20:.2f} and KD/MACD improve."
-        holding = f"Use rebounds mainly to reduce exposure; exit below {stop:.2f}."
+        stance = "🔴 Bearish / avoid new entries"
+        new_entry = f"Wait until the price moves back above MA20 ({ma20:.2f}) and both KD and MACD improve."
+        holding = f"Use rebounds to trim the position. Exit if the price falls below {stop:.2f}."
     elif score <= -0.5:
-        stance = "🟠 Weak / Wait"
-        new_entry = f"Wait for stabilization and a move back above MA20 {ma20:.2f} before reassessing."
-        holding = f"Control position size; reduce below {stop:.2f} and become more constructive only after reclaiming MA20."
+        stance = "🟠 Weak / wait"
+        new_entry = f"Reassess once the price steadies and moves back above MA20 ({ma20:.2f})."
+        holding = f"Keep the position small and trim it if the price falls below {stop:.2f}. Reassess once the price moves back above MA20."
     else:
-        stance = "⚪ Range-Bound"
-        new_entry = f"Consider entries only near {buy_low:.2f}～{buy_high:.2f}; reassess after a breakout."
-        holding = f"Hold without adding; exit below {stop:.2f}; near {target:.2f} consider partial profit-taking."
+        stance = "⚪ Range-bound"
+        new_entry = f"Consider an entry only near the {buy_low:.2f} to {buy_high:.2f} range. Reassess if the price breaks out of its range."
+        holding = f"Keep your current position size. Exit if the price falls below {stop:.2f} and consider taking some profits near {target:.2f}."
 
     warns = []
     if rsi >= 75:
-        warns.append("RSI is elevated; avoid chasing")
+        warns.append("RSI is high. Avoid chasing the price.")
     if vol_ratio >= 2.0:
-        warns.append("Volume is unusually high; watch for next-session volatility")
+        warns.append("Volume is unusually high. Watch for larger price swings next session.")
     if c < ma60:
-        warns.append("Price remains below MA60; medium-term trend is weak")
+        warns.append("The price is below MA60, a sign of a weak medium-term trend.")
 
     return {
         "stance": stance,
         "new_entry": new_entry,
         "holding": holding,
-        "warning": "; ".join(warns) if warns else "No additional technical warnings",
+        "warning": " ".join(warns) if warns else "No additional technical warnings.",
         "stop": stop,
         "target": target,
     }
@@ -549,15 +549,15 @@ def render_ai_login() -> bool:
     expected_password = get_secret("AI_ACCESS_PASSWORD")
 
     if not expected_password:
-        st.warning("AI_ACCESS_PASSWORD is not configured. AI access is currently locked.")
+        st.warning("Set AI_ACCESS_PASSWORD to enable AI analysis.")
         return False
 
     if ai_access_unlocked():
         c1, c2 = st.columns([4, 1])
         with c1:
-            st.success("🔓 AI access unlocked")
+            st.success("AI analysis is unlocked.")
         with c2:
-            if st.button("Lock AI", key="ai_logout_btn"):
+            if st.button("Lock AI access", key="ai_logout_btn"):
                 st.session_state["ai_access_unlocked"] = False
                 st.rerun()
         return True
@@ -565,14 +565,14 @@ def render_ai_login() -> bool:
     password = st.text_input(
         "AI access password",
         type="password",
-        placeholder="Enter the password to use AI",
+        placeholder="Enter your AI access password",
         key="ai_access_password_input",
     )
 
-    if st.button("🔐 Unlock AI", key="ai_unlock_btn"):
+    if st.button("Unlock AI access", key="ai_unlock_btn"):
         if password == expected_password:
             st.session_state["ai_access_unlocked"] = True
-            st.success("AI access unlocked.")
+            st.success("AI analysis is unlocked.")
             st.rerun()
         else:
             st.error("Incorrect password.")
@@ -748,7 +748,7 @@ def score_gauge(score: float):
         mode="gauge+number",
         value=score,
         number={"suffix": " / 5"},
-        title={"text": "Multi-Factor Momentum Score"},
+        title={"text": "Technical score"},
         gauge={
             "axis": {"range": [-5, 5]},
             "steps": [
@@ -1030,13 +1030,13 @@ selected_market = st.sidebar.radio(
 
 if selected_market == "TW Stock":
     subpage = st.sidebar.radio(
-        "TW Stock Functions",
+        "Taiwan stock tools",
         ["Individual Stock Analysis", "Full-Market Screening", "Scoring Rules"],
         key="tw_subpage",
     )
 else:
     subpage = st.sidebar.radio(
-        "US Stock Functions",
+        "U.S. stock tools",
         ["Individual Stock Analysis", "Market Overview", "Scoring Rules"],
         key="us_subpage",
     )
@@ -1045,31 +1045,31 @@ else:
 # Shared Watchlist in Sidebar
 # =========================================================
 st.sidebar.divider()
-st.sidebar.subheader("⭐ My Watchlist (TW + US)")
+st.sidebar.subheader("Watchlist")
 
 fav_market = st.sidebar.selectbox(
-    "Watchlist Market",
+    "Market for this ticker",
     ["TW Stock", "US Stock"],
     key="fav_add_market",
 )
-fav_placeholder = "e.g. 2330" if fav_market == "TW Stock" else "e.g. AAPL / MU"
+fav_placeholder = "e.g., 2330" if fav_market == "TW Stock" else "e.g., AAPL or MU"
 fav_input = st.sidebar.text_input(
     "Ticker",
     placeholder=fav_placeholder,
     key="fav_add_input",
 )
 
-if st.sidebar.button("➕ Add to Watchlist", use_container_width=True):
+if st.sidebar.button("Add to watchlist", use_container_width=True):
     sid = fav_input.strip().upper()
     if add_combined_favorite(sid, fav_market):
         st.sidebar.success(f"Added {resolve_name_by_market(sid, fav_market)} ({sid})")
         st.rerun()
     else:
-        st.sidebar.warning("Please enter a valid ticker.")
+        st.sidebar.warning("Enter a valid ticker for the selected market.")
 
 favorites = load_combined_favorites()
 if not favorites:
-    st.sidebar.caption("Your watchlist is empty.")
+    st.sidebar.caption("Add a ticker to start your watchlist.")
 else:
     for item in favorites:
         f_market = item["market"]
@@ -1088,15 +1088,15 @@ else:
             remove_combined_favorite(sid, f_market)
             st.rerun()
 
-st.sidebar.caption("TW and US stocks share one watchlist. Each visitor still has an independent session.")
+st.sidebar.caption("Keep Taiwan and U.S. stocks in one watchlist for your current session.")
 
 # =========================================================
 # Page Header
 # =========================================================
 st.title("📈 I-Cheng Stock Bot")
 st.caption(
-    "Taiwan full-market screening | U.S. market overview + popular-stock radar | Shared watchlist | "
-    "Up to 5 years of daily data and 10 years of weekly data | Optional AI insights"
+    "Analyze individual stocks, scan the Taiwan market, or follow major U.S. ETFs and actively traded stocks. "
+    "Use one watchlist for both markets. You can access up to 5 years of daily price history or 10 years of weekly price history. AI analysis is optional."
 )
 
 
@@ -1110,11 +1110,11 @@ def render_stock_analysis(selected_market: str):
             "Ticker",
             key=stock_key,
             max_chars=10,
-            placeholder="e.g. 2330" if is_tw else "e.g. AAPL / MU / NVDA",
+            placeholder="e.g., 2330" if is_tw else "e.g., AAPL, MU, or NVDA",
         ).strip().upper()
 
         interval_label = st.selectbox(
-            "Chart Interval",
+            "Chart interval",
             ["Daily", "Weekly", "60m", "15m", "5m"],
             key=f"interval_{selected_market}",
         )
@@ -1128,7 +1128,7 @@ def render_stock_analysis(selected_market: str):
         }
 
         chart_range = st.selectbox(
-            "Chart Display Range",
+            "Chart range",
             ["6 months", "1 year", "3 years", "5 years", "All"],
             index=0,
             key=f"chart_range_{selected_market}",
@@ -1149,24 +1149,24 @@ def render_stock_analysis(selected_market: str):
         )
 
         if st.button(
-            "⭐ Add Current Stock to Watchlist",
+            "Add to watchlist",
             use_container_width=True,
             key=f"add_current_{selected_market}",
         ):
             if add_combined_favorite(stock_id, selected_market):
-                st.success("Added to watchlist")
+                st.success("Added to your watchlist.")
                 st.rerun()
 
     if not stock_id:
         return
 
     interval = interval_map[interval_label]
-    with st.spinner("Loading market data and calculating technical indicators..."):
+    with st.spinner("Loading price data..."):
         df = fetch_market_df(stock_id, selected_market, interval, period_map[interval])
 
     if df.empty:
-        example = "2330" if is_tw else "MU、AAPL、NVDA"
-        st.error(f"No price data found. Please verify the ticker. Example: {example}")
+        example = "2330" if is_tw else "MU, AAPL, or NVDA"
+        st.error(f"No price data found. Check the ticker and try again (e.g., {example}).")
         return
 
     ind = calculate_indicators(df)
@@ -1177,11 +1177,11 @@ def render_stock_analysis(selected_market: str):
 
     st.subheader(f"{name} ({stock_id})")
     m1, m2, m3, m4, m5 = st.columns(5)
-    m1.metric("Latest Price", f"{ind['c_now']:.2f}", f"{pct_ch:+.2f}%")
-    m2.metric("Overall Score", f"{ev['score']:+.1f} / 5")
+    m1.metric("Latest price", f"{ind['c_now']:.2f}", f"{pct_ch:+.2f}%")
+    m2.metric("Technical score", f"{ev['score']:+.1f} / 5")
     m3.metric("RSI", f"{ind['rsi']:.1f}")
-    m4.metric("Volume Ratio", f"{ev['vol_ratio']:.2f}x")
-    m5.metric("Bullish Strength", f"{ev['bull_pct']:.0f}%")
+    m4.metric("Volume ratio", f"{ev['vol_ratio']:.2f}x")
+    m5.metric("Bullish strength", f"{ev['bull_pct']:.0f}%")
 
     chart_limit = chart_range_map[chart_range]
     chart_df = df if chart_limit is None else df.tail(chart_limit)
@@ -1191,12 +1191,12 @@ def render_stock_analysis(selected_market: str):
         st.plotly_chart(price_chart(chart_df, ind), use_container_width=True)
     with c2:
         st.plotly_chart(score_gauge(ev["score"]), use_container_width=True)
-        st.info(f"**Strategy：{strategy['stance']}**")
-        st.write(f"**New entry:** {strategy['new_entry']}")
-        st.write(f"**Existing position:** {strategy['holding']}")
+        st.info(f"**Strategy: {strategy['stance']}**")
+        st.write(f"**Considering an entry?** {strategy['new_entry']}")
+        st.write(f"**Already holding the stock?** {strategy['holding']}")
         st.write(f"**Risk note:** {strategy['warning']}")
 
-    t1, t2, t3 = st.tabs(["Technical Indicators", "Scoring Signals", "Risk"])
+    t1, t2, t3 = st.tabs(["Technical indicators", "Scoring signals", "Risk"])
     with t1:
         st.dataframe(pd.DataFrame({
             "Indicator": ["MA5", "MA20", "MA60", "Upper Bollinger Band", "Lower Bollinger Band", "RSI", "K", "D", "DIF", "MACD", "ATR"],
@@ -1206,20 +1206,20 @@ def render_stock_analysis(selected_market: str):
             ],
         }), use_container_width=True, hide_index=True)
     with t2:
-        st.success("Bullish signals: " + ("、".join(ev["bull_signals"]) if ev["bull_signals"] else "None"))
-        st.error("Bearish signals: " + ("、".join(ev["bear_signals"]) if ev["bear_signals"] else "None"))
+        st.success("Bullish signals: " + (" · ".join(ev["bull_signals"]) if ev["bull_signals"] else "None"))
+        st.error("Bearish signals: " + (" · ".join(ev["bear_signals"]) if ev["bear_signals"] else "None"))
     with t3:
         risk_pct = abs(ind["c_now"] - strategy["stop"]) / ind["c_now"] * 100
         reward_pct = abs(strategy["target"] - ind["c_now"]) / ind["c_now"] * 100
         rr = reward_pct / max(risk_pct, 0.5)
         r1, r2, r3 = st.columns(3)
-        r1.metric("Stop Reference", f"{strategy['stop']:.2f}", f"-{risk_pct:.1f}%")
-        r2.metric("Target Reference", f"{strategy['target']:.2f}", f"+{reward_pct:.1f}%")
-        r3.metric("Risk / Reward", f"{rr:.1f} : 1")
+        r1.metric("Stop level", f"{strategy['stop']:.2f}", f"-{risk_pct:.1f}%")
+        r2.metric("Price target", f"{strategy['target']:.2f}", f"+{reward_pct:.1f}%")
+        r3.metric("Reward / risk", f"{rr:.1f} : 1")
 
     st.divider()
-    st.subheader("🤖 AI Short-Term / Long-Term Analysis")
-    st.caption("AI is optional and does not run automatically. The OpenAI API is called only after you unlock AI access and click the AI analysis button.")
+    st.subheader("AI analysis")
+    st.caption("Unlock AI access and select Generate AI analysis to request a short- and long-term view from OpenAI.")
 
     if render_ai_login():
         ai_key = f"ai_advice::{selected_market}::{stock_id}::{interval}"
@@ -1227,22 +1227,22 @@ def render_stock_analysis(selected_market: str):
             st.info("OPENAI_API_KEY is not configured. Add it in Streamlit App Settings → Secrets.")
         else:
             if st.button(
-                "🤖 Generate AI Analysis",
+                "Generate AI analysis",
                 type="primary",
                 key=f"ai_btn_{selected_market}_{stock_id}_{interval}",
             ):
                 try:
-                    with st.spinner("AI is generating short-term and long-term insights..."):
+                    with st.spinner("Generating AI analysis..."):
                         st.session_state[ai_key] = generate_ai_advice(
                             stock_id, name, interval_label, ind, ev, strategy, selected_market
                         )
                 except Exception as e:
-                    st.error(f"AI analysis is currently unavailable: {e}")
+                    st.error(f"Couldn't generate the AI analysis. {e}")
 
             if st.session_state.get(ai_key):
                 st.markdown(st.session_state[ai_key])
                 if st.button(
-                    "🔄 Regenerate AI Analysis",
+                    "Regenerate AI analysis",
                     key=f"ai_refresh_{selected_market}_{stock_id}_{interval}",
                 ):
                     try:
@@ -1252,7 +1252,7 @@ def render_stock_analysis(selected_market: str):
                             )
                         st.rerun()
                     except Exception as e:
-                        st.error(f"AI analysis is currently unavailable: {e}")
+                        st.error(f"Couldn't regenerate the AI analysis. {e}")
 
 
 # =========================================================
@@ -1260,85 +1260,85 @@ def render_stock_analysis(selected_market: str):
 # =========================================================
 if selected_market == "TW Stock":
     if subpage == "Individual Stock Analysis":
-        st.subheader("TW StockIndividual Stock Analysis")
+        st.subheader("Taiwan stock analysis")
         render_stock_analysis("TW Stock")
 
     elif subpage == "Full-Market Screening":
-        st.subheader("TW Stock Full-Market Screening + Market Breadth")
+        st.subheader("Taiwan market screening and breadth")
         st.caption(
-            "Scans Taiwan listed and OTC common stocks in two stages. Stage one ranks stocks by trend, returns, volume, and liquidity; "
-            "stage two applies the full technical scoring model to the top 50 candidates. Market breadth uses the same market-wide dataset."
+            "The scan covers listed and OTC common stocks in Taiwan. It filters for liquidity and ranks eligible stocks by trend, returns, and trading volume. "
+            "The full technical score is calculated for up to 50 top-ranked stocks. Market breadth uses the same market-wide data."
         )
 
         c1, c2 = st.columns([1, 3])
         with c1:
-            if st.button("🚀 Run Full-Market Scan Now", type="primary", use_container_width=True):
+            if st.button("Rescan the Taiwan market", type="primary", use_container_width=True):
                 run_full_market_scan.clear()
                 first_stage_market_scan.clear()
                 st.rerun()
         with c2:
-            st.info("Results are cached for 30 minutes. A manual rescan clears the cache and refreshes the data immediately.")
+            st.info("The app reuses scan results for 30 minutes. Select Rescan the Taiwan market to refresh them now.")
 
-        with st.spinner("Scanning the Taiwan market. The first run may take some time..."):
+        with st.spinner("Scanning the Taiwan market. The first scan may take a while."):
             scan = run_full_market_scan()
 
         pct = scan["above_ma20"] / max(scan["valid_total"], 1) * 100
-        status = "🟢 Healthy Bullish Breadth" if pct >= 50 else "🟡 Mixed / Consolidating" if pct >= 30 else "🔴 Weak / Bearish Breadth"
+        status = "🟢 Broad participation" if pct >= 50 else "🟡 Mixed participation" if pct >= 30 else "🔴 Weak participation"
 
         m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Stocks Above MA20", f"{pct:.1f}%")
-        m2.metric("Valid Market Sample", scan["valid_total"])
-        m3.metric("Stage-One Candidates", scan["candidates"])
-        m4.metric("Data Updated", scan["updated"])
+        m1.metric("Stocks above MA20", f"{pct:.1f}%")
+        m2.metric("Stocks with usable data", scan["valid_total"])
+        m3.metric("Stocks shortlisted", scan["candidates"])
+        m4.metric("Last updated", scan["updated"])
 
-        st.write(f"**Market Status: {status}**")
+        st.write(f"**Market breadth: {status}**")
         st.caption(
-            "Market breadth is the percentage of stocks trading above the 20-day moving average. A higher percentage suggests broader participation; "
-            "a lower percentage suggests weaker internal market structure."
+            "Market breadth measures the share of stocks trading above their 20-day moving averages. "
+            "A higher share means more stocks are participating in the market's strength."
         )
 
-        tab1, tab2 = st.tabs(["🔥 Strong Bullish Stocks", "🔻 Bullish Pullback Stocks"])
+        tab1, tab2 = st.tabs(["Strong stocks", "Bullish pullbacks"])
         with tab1:
             if scan["strong"].empty:
-                st.info("No stocks currently meet the strong-bullish criteria.")
+                st.info("No stocks meet the strong-stock criteria in this scan.")
             else:
                 st.dataframe(scan["strong"], use_container_width=True, hide_index=True)
         with tab2:
             if scan["pullback"].empty:
-                st.info("No stocks currently meet the bullish-pullback criteria.")
+                st.info("No stocks meet the bullish pullback criteria in this scan.")
             else:
                 st.dataframe(scan["pullback"], use_container_width=True, hide_index=True)
 
     elif subpage == "Scoring Rules":
-        st.subheader("📖 Taiwan Stock Scoring Rules")
+        st.subheader("How Taiwan stocks are scored")
         st.markdown(
             """
-**1. Moving-Average Trend (MA5 / MA20 / MA60)**
-- Bullish moving-average alignment: +1.5
-- Price above MA20: +1.0
-- Bearish moving-average alignment: -1.5
-- Price below MA20: -1.0
+**1. Moving-average trend (MA5 / MA20 / MA60)**
+- Price > MA5 > MA20 > MA60 (+1.5)
+- Price above MA20 (+1.0)
+- Price < MA5 < MA20 < MA60 (-1.5)
+- Price below MA20 (-1.0)
 
-**2. RSI（14）**
-- 55–75: +1.0
-- Below 30: +1.0
-- Above 80: -1.0
-- Below 45: -0.5
+**2. RSI (14)**
+- 55 to 75 (+1.0)
+- Below 30 (+1.0)
+- Above 80 (-1.0)
+- Below 45 (-0.5)
 
-**3. KD（9）**
-- Golden cross: +1.0
-- K > D：+0.5
-- Death cross: -1.0
-- K < D：-0.5
+**3. KD (9)**
+- K crosses above D (golden cross, +1.0)
+- K > D (+0.5)
+- K crosses below D (death cross, -1.0)
+- K < D (-0.5)
 
 **4. MACD**
-- DIF > MACD：+1.0
-- DIF < MACD：-1.0
+- DIF > MACD (+1.0)
+- DIF < MACD (-1.0)
 
 **5. Volume and Bollinger Bands**
-- Volume ≥ 1.5x the 20-day average with a price gain: +1.0
-- Price near/below lower Bollinger Band: +0.5
-- Price above upper Bollinger Band with excessive extension: -0.5
+- Price rises on at least 1.5× the 20-day average volume (+1.0)
+- Price below the lower Bollinger Band (+0.5)
+- Price above the upper Bollinger Band (-0.5)
             """
         )
 
@@ -1347,23 +1347,23 @@ if selected_market == "TW Stock":
 # =========================================================
 else:
     if subpage == "Individual Stock Analysis":
-        st.subheader("US StockIndividual Stock Analysis")
-        st.caption("Enter a Yahoo Finance ticker directly, for example AAPL, NVDA, MU, or TSLA.")
+        st.subheader("U.S. stock analysis")
+        st.caption("Enter a Yahoo Finance ticker such as AAPL, NVDA, MU, or TSLA.")
         render_stock_analysis("US Stock")
 
     elif subpage == "Market Overview":
-        st.subheader("US Stock Market Overview + Popular-Stock Radar")
+        st.subheader("U.S. market overview")
         st.caption(
-            "This is not a full U.S. market scan. The upper section uses SPY, QQQ, DIA, and IWM to summarize major market direction; "
-            "the lower section scans a representative group of liquid stocks."
+            "SPY, QQQ, DIA, and IWM show how major U.S. indexes are moving. "
+            "The stock scan covers a selected group of actively traded stocks."
         )
 
-        if st.button("🔄 Refresh U.S. Market Data", type="primary"):
+        if st.button("Refresh U.S. market data", type="primary"):
             get_us_index_overview.clear()
             run_us_scan_cached.clear()
             st.rerun()
 
-        st.markdown("### 📈 Major Market ETFs")
+        st.markdown("### Major U.S. ETFs")
         index_rows = get_us_index_overview()
         if index_rows:
             cols = st.columns(len(index_rows))
@@ -1376,20 +1376,20 @@ else:
                     )
                     st.caption(f"{row['trend']} | Score {row['score']:+.1f} | RSI {row['rsi']:.1f}")
         else:
-            st.info("U.S. market index data is currently unavailable.")
+            st.info("U.S. ETF data is unavailable right now.")
 
         st.divider()
-        st.markdown("### 🔭 Popular-Stock Radar")
-        with st.spinner("Loading U.S. popular-stock radar data..."):
+        st.markdown("### U.S. stock scan")
+        with st.spinner("Scanning U.S. stocks..."):
             us_scan = run_us_scan_cached()
 
         us_pct = us_scan["above_ma20"] / max(us_scan["total"], 1) * 100
         u1, u2, u3 = st.columns(3)
-        u1.metric("Popular Stocks Above MA20", f"{us_pct:.1f}%")
-        u2.metric("Valid Radar Sample", us_scan["total"])
-        u3.metric("Data Updated", us_scan["time"])
+        u1.metric("Scanned stocks above MA20", f"{us_pct:.1f}%")
+        u2.metric("Stocks with usable data", us_scan["total"])
+        u3.metric("Last updated", us_scan["time"])
 
-        tab1, tab2 = st.tabs(["🔥 Popular Strong Stocks", "🔻 Popular Pullbacks"])
+        tab1, tab2 = st.tabs(["Strong stocks", "Pullbacks"])
         with tab1:
             if us_scan["strong"]:
                 df_us_strong = pd.DataFrame(us_scan["strong"]).copy()
@@ -1400,7 +1400,7 @@ else:
                 show_cols = [c for c in ["Ticker", "Name", "Current Price", "Change %", "Score", "RSI", "Volume Ratio"] if c in df_us_strong.columns]
                 st.dataframe(df_us_strong[show_cols], use_container_width=True, hide_index=True)
             else:
-                st.info("No stocks in the radar currently meet the strong-stock criteria.")
+                st.info("No stocks meet the strong-stock criteria in this scan.")
 
         with tab2:
             if us_scan["pullback"]:
@@ -1412,94 +1412,65 @@ else:
                 show_cols = [c for c in ["Ticker", "Name", "Current Price", "Change %", "Score", "RSI", "Volume Ratio"] if c in df_us_pull.columns]
                 st.dataframe(df_us_pull[show_cols], use_container_width=True, hide_index=True)
             else:
-                st.info("No stocks in the radar currently meet the pullback criteria.")
+                st.info("No stocks meet the pullback criteria in this scan.")
 
     elif subpage == "Scoring Rules":
-        st.subheader("📖 U.S. Multi-Factor Technical Momentum Scoring Rules (-5 to +5)")
+        st.subheader("How U.S. stocks are scored (-5 to +5)")
         st.caption(
-            "U.S. stock analysis uses the same technical multi-factor scoring framework as the Taiwan section."
-            "A higher score indicates stronger bullish technical momentum, but market conditions, fundamentals, and risk management should still be considered."
+            "The U.S. and Taiwan tools use the same technical scoring rules. "
+            "A higher score signals stronger bullish momentum. Consider market conditions, company fundamentals, and risk alongside the score."
         )
         st.markdown(
             """
-### 1️⃣ Moving-Average Trend (MA5 / MA20 / MA60)
-Used to evaluate whether short- and medium-term trends are aligned.
+### Moving-average trend (MA5 / MA20 / MA60)
 
-- **Price > MA5 > MA20 > MA60：+1.5**
-  - Indicates a well-aligned bullish short- and medium-term trend.
-- **Price above MA20：+1.0**
-  - Indicates that price remains above the 20-day moving average and the structure is moderately bullish.
-- **Price < MA5 < MA20 < MA60：-1.5**
-  - Indicates bearish moving-average alignment and a weaker trend.
-- **Price below MA20：-1.0**
-  - Indicates short-term weakness after losing MA20.
+Compare the price with its short- and medium-term moving averages.
 
-### 2️⃣ RSI Relative Strength Index (14)
-Used to evaluate momentum strength and possible overbought or oversold conditions.
+- **Price > MA5 > MA20 > MA60** earns +1.5 for a bullish alignment.
+- **Price above MA20** earns +1.0.
+- **Price < MA5 < MA20 < MA60** gets -1.5 for a bearish alignment.
+- **Price below MA20** gets -1.0.
 
-- **RSI 55～75：+1.0**
-  - A relatively healthy strength zone, suggesting stronger buying momentum.
-- **RSI < 30：+1.0**
-  - An oversold zone that may be monitored for a rebound.
-- **RSI > 80：-1.0**
-  - An overbought condition with increased short-term chasing risk.
-- **RSI < 45：-0.5**
-  - Momentum is weak.
+### Relative Strength Index (RSI, 14)
 
-### 3️⃣ KD Stochastic Indicator (9)
-Used to monitor short-term turning points.
+- **RSI from 55 to 75** earns +1.0 for stronger buying momentum.
+- **RSI < 30** earns +1.0. The stock is oversold and may rebound.
+- **RSI > 80** gets -1.0. The stock is overbought, which makes chasing the price riskier.
+- **RSI < 45** gets -0.5 for weak momentum.
 
-- **KD golden cross: +1.0**
-  - K crossing above D is treated as a short-term bullish signal.
-- **K > D：+0.5**
-  - KD remains in a bullish structure.
-- **KD death cross: -1.0**
-  - K crossing below D suggests short-term weakening.
-- **K < D：-0.5**
-  - KD remains in a bearish structure.
+### KD stochastic indicator (9)
 
-### 4️⃣ MACD Trend Momentum (12 / 26 / 9)
-Used to evaluate short- to medium-term trend momentum.
+- **K crosses above D (golden cross)** earns +1.0 for a short-term bullish signal.
+- **K > D** earns +0.5.
+- **K crosses below D (death cross)** gets -1.0 for a short-term bearish signal.
+- **K < D** gets -0.5.
 
-- **DIF > MACD：+1.0**
-  - MACD is bullish, suggesting stronger trend momentum.
-- **DIF < MACD：-1.0**
-  - MACD is bearish, suggesting weaker trend momentum.
+### MACD (12 / 26 / 9)
 
-### 5️⃣ Volume and Bollinger Bands
-Used to assess whether price moves are supported by volume and whether price is overly extended.
+- **DIF > MACD** earns +1.0 for bullish momentum.
+- **DIF < MACD** gets -1.0 for bearish momentum.
 
-- **Volume ≥ 1.5x the 20-day average with a price gain：+1.0**
-  - Indicates a higher-volume advance with stronger participation.
-- **Price below the lower Bollinger Band：+0.5**
-  - Treated as an oversold rebound watch, not a guaranteed bottom.
-- **Price above the upper Bollinger Band：-0.5**
-  - Suggests short-term overextension and higher chasing risk.
+### Volume and Bollinger Bands
 
----
+- **Price rises on at least 1.5× the 20-day average volume** earns +1.0.
+- **Price below the lower Bollinger Band** earns +0.5. Watch for a possible rebound.
+- **Price above the upper Bollinger Band** gets -0.5. The price may be stretched, which makes chasing it riskier.
 
-### 📊 How to Read the Score
+### How to read the score
 
-- **+3.0 ～ +5.0：🟢 Strong Bullish**
-  - Most trend and momentum signals are bullish, but chasing price is still discouraged.
-- **+1.5 ～ +2.5：🟡 Bullish / Wait for Pullback**
-  - The structure is bullish; a pullback toward support may offer a better entry.
-- **+0.5 ～ +1.0：🟡 Mildly Bullish**
-  - The trend is positive but not yet strongly established.
-- **-0.4 ～ +0.4：⚪ Neutral / Consolidating**
-  - Bullish and bearish signals are balanced; wait for clearer direction.
-- **-0.5 ～ -2.0：🟠 Weak**
-  - Short-term momentum is weak; position size should be controlled.
-- **-2.5 ～ -5.0：🔴 Bearish / Weak**
-  - The technical structure is clearly weak; waiting for renewed strength may be preferable.
+- **+3.0 to +5.0 (strongly bullish).** Most trend and momentum signals are bullish. Avoid chasing the price.
+- **+1.5 to +2.5 (bullish).** A pullback toward support may offer a better entry.
+- **+0.5 to +1.0 (mildly bullish).** The trend is positive and still developing.
+- **-0.4 to +0.4 (neutral or range-bound).** Bullish and bearish signals are roughly balanced. Wait for a clearer direction.
+- **-2.0 to -0.5 (weak).** Short-term momentum is weak, so keep position size in check.
+- **-5.0 to -2.5 (bearish).** Consider waiting for signs of recovery.
 
-> The U.S. score is a technical quantitative tool and does not include complete financial statements, valuation, macroeconomic conditions, or real-time news.
-> Long-term investing should also consider company fundamentals and industry trends.
+> The score uses technical indicators only. It leaves out full financial statements, valuation, macroeconomic conditions, and real-time news. For long-term investing, also consider company fundamentals and industry trends.
             """
         )
 
 st.divider()
 st.caption(
-    "⚠️ This website and its AI-generated content are intended for quantitative research, technical analysis, coursework, and portfolio demonstration. "
-    "AI output may contain errors and should be independently verified. Nothing here guarantees returns or constitutes personalized investment advice."
+    "⚠️ Use this site and its AI analysis for quantitative research, technical analysis, coursework, and portfolio demonstrations. "
+    "Check AI results independently because they can contain errors. This material provides general information only, with no guarantee of returns or personalized investment advice."
 )
